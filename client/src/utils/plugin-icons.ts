@@ -1,0 +1,57 @@
+import {
+  LayoutDashboard,
+  Target,
+  Clock,
+  Brain,
+  Baby,
+  Bot,
+  Sparkles,
+  Wallet,
+  BookOpen,
+  Heart,
+  Puzzle,
+  Zap,
+  Rocket,
+  Palette,
+  Lightbulb,
+  TrendingUp,
+  Users,
+  Settings,
+  Timer,
+  Hourglass,
+  FileSpreadsheet,
+  ClipboardList,
+  Tv,
+  type LucideIcon,
+} from 'lucide-react';
+
+export const pluginIconMap: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  target: Target,
+  clock: Clock,
+  brain: Brain,
+  baby: Baby,
+  bot: Bot,
+  sparkles: Sparkles,
+  wallet: Wallet,
+  book: BookOpen,
+  heart: Heart,
+  puzzle: Puzzle,
+  zap: Zap,
+  rocket: Rocket,
+  palette: Palette,
+  'clipboard-list': ClipboardList,
+  lightbulb: Lightbulb,
+  'trending-up': TrendingUp,
+  users: Users,
+  settings: Settings,
+  timer: Timer,
+  hourglass: Hourglass,
+  'file-spreadsheet': FileSpreadsheet,
+  tv: Tv,
+};
+
+export function getPluginIcon(iconName: string): LucideIcon {
+  const key = iconName.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  return pluginIconMap[key] ?? Sparkles;
+}

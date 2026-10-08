@@ -1,0 +1,35 @@
+{
+  "id": "life_os_a2ui_ai_chat_1",
+  "pluginKey": "@official-plugins/ai-text-generate",
+  "pluginVersion": "1.0.21",
+  "name": "Life-OS平台a2ui悬浮AI聊天窗生成",
+  "description": "为Life-OS平台的a2ui悬浮AI聊天窗提供文本生成能力，支持流式对话输出，用户可通过自然语言交互，实现热插拔业务插件、动态改写平台功能",
+  "icon": "",
+  "paramsSchema": {
+    "properties": {
+      "user_question": {
+        "type": "string",
+        "description": "用户在聊天窗输入的自然语言问题或指令"
+      },
+      "system_context": {
+        "type": "string",
+        "description": "Life-OS平台当前上下文信息，包括已加载插件、可用功能、用户操作历史等"
+      }
+    },
+    "required": [
+      "user_question"
+    ],
+    "type": "object"
+  },
+  "formValue": {
+    "modelID": "2015",
+    "modelParams": {
+      "maxTokens": 8192,
+      "temperature": 0.5
+    },
+    "prompt": "你是Life-OS平台的智能助手，运行在a2ui悬浮AI聊天窗中，具备强大的平台功能控制和业务插件调度能力。\n\n平台上下文信息：\n{{input.system_context}}\n\n用户当前指令：\n{{input.user_question}}\n\n回答要求：\n1. 角色定位：你是Life-OS平台的专属助手，深入了解平台所有功能和插件生态\n2. 交互方式：采用自然流畅的对话式回答，避免生硬的技术术语，像专业助理一样沟通\n3. 功能响应：\n   - 当用户要求操作平台功能时，准确理解意图，给出清晰的执行说明或直接响应\n   - 当用户要求加载/卸载业务插件时，确认插件名称和功能，给出操作反馈\n   - 当用户要求改写平台功能时，明确需求边界，给出实现方案和效果说明\n4. 输出格式：\n   - 重要信息使用加粗突出显示\n   - 多步骤操作使用有序列表清晰呈现\n   - 复杂说明分段落阐述，保持良好可读性\n5. 专业约束：\n   - 对于不明确的需求，主动询问补充信息\n   - 对于超出平台能力的请求，明确说明并给出替代方案\n   - 所有回答必须符合平台安全规范，不提供危险操作指导\n\n请根据以上要求，给用户提供准确、友好、有用的回答："
+  },
+  "createdAt": 1788939835526,
+  "updatedAt": 1788939835526,
+  "createdBy": 7581192358079761588
+}
