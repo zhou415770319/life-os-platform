@@ -154,6 +154,7 @@ const ReviewBoardPage = () => {
   const [selectedPublishIds, setSelectedPublishIds] = useState<string[]>([]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dirtyRef = useRef(false);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
 
   const panelKey = useMemo(() => keyFor(level, dateStr), [level, dateStr]);
 
@@ -267,6 +268,25 @@ const ReviewBoardPage = () => {
       ta.focus();
     });
     toast.success('已粘贴并转换为 Markdown');
+  }
+
+  /** 快捷键：Ctrl/Cmd + Shift + T 在光标处插入待办 [ ] */
+  function handleEditorKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const selected = draft.slice(start, end);
+      const insert = selected ? `[ ] ${selected}` : '[ ] ';
+      const next = draft.slice(0, start) + insert + draft.slice(end);
+      scheduleSave(level, panelKey, next);
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = start + insert.length;
+        ta.focus();
+      });
+      toast.success('已插入待办 [ ]，回车后继续输入任务内容');
+    }
   }
 
   // 分享 / 发布
@@ -513,13 +533,42 @@ const ReviewBoardPage = () => {
                 </div>
 
                 {editMode ? (
-                  <textarea
-                    value={draft}
-                    onChange={(e) => scheduleSave(level, panelKey, e.target.value)}
-                    onPaste={handlePaste}
-                    placeholder={'从外部复制 Markdown 或富文本直接粘贴，自动转换\n\n任务清单：\n[ ] 晨跑 30 分钟\n[x] 阅读 20 页\n\n支持标题、列表、引用、代码块等语法'}
-                    className="h-[380px] w-full resize-none rounded-lg border border-white/10 bg-black/20 p-3 font-mono text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600 focus:border-emerald-500/50"
-                  />
+                  <div className="flex gap-3">
+                    {/* 左侧提示条 */}
+                    <aside className="w-[168px] flex-none rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[11px] leading-5 text-zinc-400">
+                      <div className="mb-1.5 flex items-center gap-1 font-medium text-zinc-300">
+                        <Sparkles className="h-3 w-3 text-emerald-400" />
+                        快速添加待办
+                      </div>
+                      <div className="space-y-1.5">
+                        <div>
+                          <kbd className="rounded border border-white/15 bg-black/25 px-1.5 py-0.5 font-mono text-[10px] text-zinc-200">
+                            Ctrl/⌘+Shift+T
+                          </kbd>
+                          <div className="mt-0.5 text-zinc-500">在光标处插入 [ ]</div>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500">语法</span>
+                          <div className="font-mono text-zinc-300">
+                            <div>[ ] 未完成</div>
+                            <div>[x] 已完成</div>
+                          </div>
+                        </div>
+                        <div className="text-zinc-500">
+                          从外部复制 Markdown / 富文本粘贴，勾选清单自动转为待办
+                        </div>
+                      </div>
+                    </aside>
+                    <textarea
+                      ref={editorRef}
+                      value={draft}
+                      onChange={(e) => scheduleSave(level, panelKey, e.target.value)}
+                      onPaste={handlePaste}
+                      onKeyDown={handleEditorKeyDown}
+                      placeholder={'从外部复制 Markdown 或富文本直接粘贴，自动转换\n\n任务清单：\n[ ] 晨跑 30 分钟\n[x] 阅读 20 页\n\n快捷键 Ctrl/⌘+Shift+T 插入待办'}
+                      className="h-[380px] w-full resize-none rounded-lg border border-white/10 bg-black/20 p-3 font-mono text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600 focus:border-emerald-500/50"
+                    />
+                  </div>
                 ) : (
                   <div
                     className="h-[380px] w-full overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-4 text-[13px] leading-6 text-zinc-300"
