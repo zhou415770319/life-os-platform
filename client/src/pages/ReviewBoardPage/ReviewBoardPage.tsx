@@ -105,7 +105,7 @@ function TaskList({
   onToggle: (item: ReviewBoardItem) => void;
 }) {
   if (items.length === 0) {
-    return <div className="text-sm text-zinc-600 py-6 text-center">暂无任务，在编辑区用 `- [ ] 任务名` 添加</div>;
+    return <div className="text-sm text-zinc-600 py-6 text-center">暂无任务，在编辑区用 `[ ] 任务名` 添加</div>;
   }
   return (
     <div className="space-y-1">
@@ -471,7 +471,7 @@ const ReviewBoardPage = () => {
               <CardContent className="p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <h2 className="text-sm font-medium text-zinc-300">任务清单（点击勾选）</h2>
-                  <span className="text-xs text-zinc-500">支持 - [ ] 语法</span>
+                  <span className="text-xs text-zinc-500">支持 [ ] / [x] 语法</span>
                 </div>
                 <TaskList
                   items={allItems}
@@ -517,7 +517,7 @@ const ReviewBoardPage = () => {
                     value={draft}
                     onChange={(e) => scheduleSave(level, panelKey, e.target.value)}
                     onPaste={handlePaste}
-                    placeholder={'从外部复制 Markdown 或富文本直接粘贴，自动转换\n\n任务清单：\n- [ ] 晨跑 30 分钟\n- [x] 阅读 20 页\n\n支持标题、列表、引用、代码块等语法'}
+                    placeholder={'从外部复制 Markdown 或富文本直接粘贴，自动转换\n\n任务清单：\n[ ] 晨跑 30 分钟\n[x] 阅读 20 页\n\n支持标题、列表、引用、代码块等语法'}
                     className="h-[380px] w-full resize-none rounded-lg border border-white/10 bg-black/20 p-3 font-mono text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600 focus:border-emerald-500/50"
                   />
                 ) : (

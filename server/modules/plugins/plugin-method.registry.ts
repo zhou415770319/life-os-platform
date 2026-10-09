@@ -1622,12 +1622,12 @@ export class PluginMethodRegistry {
     this.register({
       id: 'review-board.savePanel',
       name: '保存复盘内容',
-      description: '保存复盘面板内容：daily 为某日正文（支持 Markdown 与任务清单 - [ ]），weekly/monthly 为周/月总结区',
+      description: '保存复盘面板内容：daily 为某日正文（支持 Markdown 与任务清单 [ ]），weekly/monthly 为周/月总结区',
       pluginKey,
       params: [
         levelParam,
         { name: 'key', type: 'string', required: true, description: '面板 key：daily 为日期 YYYY-MM-DD；weekly 为周 YYYY-Www；monthly 为月 YYYY-MM，必填' },
-        { name: 'content', type: 'string', required: true, description: 'Markdown 正文，必填。任务清单用 - [ ] 未完成 / - [x] 已完成' },
+        { name: 'content', type: 'string', required: true, description: 'Markdown 正文，必填。任务清单用 [ ] 未完成 / [x] 已完成' },
       ],
     }, async (args) => {
       const level = String(args.level) as 'daily' | 'weekly' | 'monthly';

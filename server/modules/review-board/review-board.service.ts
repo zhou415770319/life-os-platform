@@ -127,7 +127,7 @@ function parseItems(content: string, existing: ReviewBoardItem[] = []): ReviewBo
   const result: ReviewBoardItem[] = [];
   const now = new Date().toISOString();
   for (const line of lines) {
-    const m = line.match(/^\s*[-*+]\s*\[( |x|X)\]\s+(.+)$/);
+    const m = line.match(/^\s*(?:[-*+]\s*)?\[( |x|X)\]\s+(.+)$/);
     if (!m) continue;
     const done = m[1] !== ' ';
     const text = m[2].trim();
@@ -243,7 +243,7 @@ export class ReviewBoardService implements OnModuleInit {
     if (level === 'daily') {
       const target = panel.items.find((it) => it.id === itemId);
       if (target) {
-        const re = new RegExp(`(^\\s*[-*+]\\s*\\[)( |x|X)(\\]\\s+${escapeRegExp(target.text)}\\s*$)`, 'm');
+        const re = new RegExp(`(^\\s*(?:[-*+])?\\s*\\[)( |x|X)(\\]\\s+${escapeRegExp(target.text)}\\s*$)`, 'm');
         panel.content = panel.content.replace(re, (_m, p1, _p2, p3) => `${p1}${done ? 'x' : ' '}${p3}`);
       }
     }
@@ -532,7 +532,7 @@ export class ReviewBoardService implements OnModuleInit {
       item.done = done;
       item.doneAt = done ? (item.doneAt ?? now) : undefined;
       // 同步回写 content 行
-      const re = new RegExp(`(^\\s*[-*+]\\s*\\[)( |x|X)(\\]\\s+${escapeRegExp(item.text)}\\s*$)`, 'm');
+      const re = new RegExp(`(^\\s*(?:[-*+])?\\s*\\[)( |x|X)(\\]\\s+${escapeRegExp(item.text)}\\s*$)`, 'm');
       panel.content = panel.content.replace(re, (_m, p1, _p2, p3) => `${p1}${done ? 'x' : ' '}${p3}`);
       panel.updatedAt = now;
       this.upsertPanel(panel);
@@ -755,7 +755,7 @@ export class ReviewBoardService implements OnModuleInit {
         continue;
       }
       if (inCode) { codeBuf.push(line); continue; }
-      var taskM = line.match(/^\\s*[-*+]\\s*\\[( |x|X)\\]\\s+(.+)$/);
+      var taskM = line.match(/^\\s*(?:[-*+]\\s*)?\\[( |x|X)\\]\\s+(.+)$/);
       if (taskM) { closeList(); out.push('<div class="task' + (taskM[1] !== ' ' ? ' done' : '') + '"><span class="box"></span><span class="ttext">' + inlineMd(esc(taskM[2])) + '</span></div>'); continue; }
       var liM = line.match(/^\\s*[-*+]\\s+(.+)$/);
       if (liM) { if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; } out.push('<li>' + inlineMd(esc(liM[1])) + '</li>'); continue; }

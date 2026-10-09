@@ -72,6 +72,17 @@ export function htmlToMarkdown(html: string): string {
     return out;
   };
 
+  const liText = (li: Element, ordered: boolean, idx: number): string => {
+    const cb = li.querySelector('input[type=checkbox]') as HTMLInputElement | null;
+    const text = inline(li).trim();
+    if (!text) return '';
+    if (cb) {
+      // 外部勾选清单 → 转成 [ ] / [x] 任务语法
+      return cb.checked ? `[x] ${text}` : `[ ] ${text}`;
+    }
+    return ordered ? `${idx}. ${text}` : `- ${text}`;
+  };
+
   const walk = (node: Node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType !== Node.ELEMENT_NODE) continue;
@@ -108,9 +119,9 @@ export function htmlToMarkdown(html: string): string {
         let idx = 1;
         for (const li of Array.from(el.children)) {
           if (li.tagName.toLowerCase() !== 'li') continue;
-          const text = inline(li).trim();
+          const text = liText(li, ordered, idx);
           if (!text) continue;
-          lines.push(ordered ? `${idx}. ${text}` : `- ${text}`);
+          lines.push(text);
           idx++;
           walk(li); // 嵌套列表/子内容
         }
@@ -135,8 +146,8 @@ export function htmlToMarkdown(html: string): string {
         continue;
       }
       if (tag === 'li') {
-        const text = inline(el).trim();
-        if (text) lines.push(`- ${text}`);
+        const text = liText(el, false, 1);
+        if (text) lines.push(text);
         continue;
       }
       // 未知块级：递归
@@ -195,7 +206,7 @@ export function markdownToHtml(md: string): string {
       codeBuf.push(line);
       continue;
     }
-    const task = line.match(/^\s*[-*+]\s*\[( |x|X)\]\s+(.+)$/);
+    const task = line.match(/^\s*(?:[-*+]\s*)?\[( |x|X)\]\s+(.+)$/);
     if (task) {
       closeList();
       const done = task[1] !== ' ';
@@ -259,7 +270,7 @@ export function countTasks(md: string): { total: number; done: number } {
   let total = 0;
   let done = 0;
   for (const line of md.split(/\r?\n/)) {
-    const m = line.match(/^\s*[-*+]\s*\[( |x|X)\]\s+/);
+    const m = line.match(/^\s*(?:[-*+]\s*)?\[( |x|X)\]\s+/);
     if (m) {
       total++;
       if (m[1] !== ' ') done++;
