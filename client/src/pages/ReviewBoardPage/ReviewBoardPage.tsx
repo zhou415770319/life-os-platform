@@ -261,7 +261,7 @@ const ReviewBoardPage = () => {
     const ta = e.currentTarget;
     const start = ta.selectionStart;
     const end = ta.selectionEnd;
-    const next = draft.slice(0, start) + md + draft.slice(end);
+    const next = ta.value.slice(0, start) + md + ta.value.slice(end);
     scheduleSave(level, panelKey, next);
     requestAnimationFrame(() => {
       ta.selectionStart = ta.selectionEnd = start + md.length;
@@ -277,9 +277,9 @@ const ReviewBoardPage = () => {
       const ta = e.currentTarget;
       const start = ta.selectionStart;
       const end = ta.selectionEnd;
-      const selected = draft.slice(start, end);
+      const selected = ta.value.slice(start, end);
       const insert = selected ? `[ ] ${selected}` : '[ ] ';
-      const next = draft.slice(0, start) + insert + draft.slice(end);
+      const next = ta.value.slice(0, start) + insert + ta.value.slice(end);
       scheduleSave(level, panelKey, next);
       requestAnimationFrame(() => {
         ta.selectionStart = ta.selectionEnd = start + insert.length;
