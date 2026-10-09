@@ -83,75 +83,94 @@ export function htmlToMarkdown(html: string): string {
     return ordered ? `${idx}. ${text}` : `- ${text}`;
   };
 
+  const processEl = (el: Element) => {
+    const tag = el.tagName.toLowerCase();
+
+    if (tag === 'p') {
+      const text = inline(el).trim();
+      if (text) lines.push(text);
+      return;
+    }
+    if (tag === 'div' || tag === 'section' || tag === 'article') {
+      let textBuf = '';
+      const flush = () => {
+        const t = textBuf.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+        if (t) lines.push(t);
+        textBuf = '';
+      };
+      for (const n of Array.from(el.childNodes)) {
+        if (n.nodeType === Node.TEXT_NODE) {
+          textBuf += n.textContent ?? '';
+        } else if (n.nodeType === Node.ELEMENT_NODE) {
+          flush();
+          processEl(n as Element);
+        }
+      }
+      flush();
+      return;
+    }
+    if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6') {
+      const text = inline(el).trim();
+      if (text) lines.push(`${'#'.repeat(Number(tag[1]))} ${text}`);
+      return;
+    }
+    if (tag === 'blockquote') {
+      const text = blockText(el);
+      if (text) lines.push(`> ${text}`);
+      return;
+    }
+    if (tag === 'pre') {
+      const code = (el.textContent ?? '').replace(/\n$/, '');
+      lines.push('```', code, '```');
+      return;
+    }
+    if (tag === 'code') {
+      lines.push(`\`${(el.textContent ?? '').trim()}\``);
+      return;
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      const ordered = tag === 'ol';
+      let idx = 1;
+      for (const li of Array.from(el.children)) {
+        if (li.tagName.toLowerCase() !== 'li') continue;
+        const text = liText(li, ordered, idx);
+        if (!text) continue;
+        lines.push(text);
+        idx++;
+      }
+      return;
+    }
+    if (tag === 'table') {
+      const rows = Array.from(el.querySelectorAll('tr'));
+      rows.forEach((tr, ri) => {
+        const cells = Array.from(tr.querySelectorAll('th,td')).map((c) => inline(c as Element).trim());
+        lines.push(`| ${cells.join(' | ')} |`);
+        if (ri === 0) {
+          lines.push(`| ${cells.map(() => '---').join(' | ')} |`);
+        }
+      });
+      return;
+    }
+    if (tag === 'hr') {
+      lines.push('---');
+      return;
+    }
+    if (tag === 'br') {
+      return;
+    }
+    if (tag === 'li') {
+      const text = liText(el, false, 1);
+      if (text) lines.push(text);
+      return;
+    }
+    // 未知块级：遍历其子节点处理
+    walk(el);
+  };
+
   const walk = (node: Node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType !== Node.ELEMENT_NODE) continue;
-      const el = child as Element;
-      const tag = el.tagName.toLowerCase();
-
-      if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'article') {
-        const text = inline(el).trim();
-        if (text) lines.push(text);
-        walk(el);
-        continue;
-      }
-      if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6') {
-        const text = inline(el).trim();
-        if (text) lines.push(`${'#'.repeat(Number(tag[1]))} ${text}`);
-        continue;
-      }
-      if (tag === 'blockquote') {
-        const text = blockText(el);
-        if (text) lines.push(`> ${text}`);
-        continue;
-      }
-      if (tag === 'pre') {
-        const code = (el.textContent ?? '').replace(/\n$/, '');
-        lines.push('```', code, '```');
-        continue;
-      }
-      if (tag === 'code') {
-        lines.push(`\`${(el.textContent ?? '').trim()}\``);
-        continue;
-      }
-      if (tag === 'ul' || tag === 'ol') {
-        const ordered = tag === 'ol';
-        let idx = 1;
-        for (const li of Array.from(el.children)) {
-          if (li.tagName.toLowerCase() !== 'li') continue;
-          const text = liText(li, ordered, idx);
-          if (!text) continue;
-          lines.push(text);
-          idx++;
-          walk(li); // 嵌套列表/子内容
-        }
-        continue;
-      }
-      if (tag === 'table') {
-        const rows = Array.from(el.querySelectorAll('tr'));
-        rows.forEach((tr, ri) => {
-          const cells = Array.from(tr.querySelectorAll('th,td')).map((c) => inline(c as Element).trim());
-          lines.push(`| ${cells.join(' | ')} |`);
-          if (ri === 0) {
-            lines.push(`| ${cells.map(() => '---').join(' | ')} |`);
-          }
-        });
-        continue;
-      }
-      if (tag === 'hr') {
-        lines.push('---');
-        continue;
-      }
-      if (tag === 'br') {
-        continue;
-      }
-      if (tag === 'li') {
-        const text = liText(el, false, 1);
-        if (text) lines.push(text);
-        continue;
-      }
-      // 未知块级：递归
-      walk(el);
+      processEl(child as Element);
     }
   };
 
