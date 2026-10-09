@@ -207,6 +207,8 @@ export default function ChildTvAdminPage() {
   const [browseOpen, setBrowseOpen] = useState(false);
   const [browseMode, setBrowseMode] = useState<'folder' | 'file'>('folder');
   const [lockMinutes, setLockMinutes] = useState(240);
+  const [activeTab, setActiveTab] = useState<'console' | 'schedules' | 'records' | 'settings'>('console');
+  const [formOpen, setFormOpen] = useState(false);
 
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['child-tv'] });
@@ -295,6 +297,7 @@ export default function ChildTvAdminPage() {
     onSuccess: () => {
       toast.success(form.id ? '时段已更新' : '时段已创建');
       setForm(EMPTY_FORM);
+      setFormOpen(false);
       queryClient.invalidateQueries({ queryKey: ['child-tv-schedules'] });
     },
     onError: (e) => {
@@ -338,7 +341,7 @@ export default function ChildTvAdminPage() {
       mediaType: s.mediaType,
       enabled: s.enabled,
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setFormOpen(true);
   };
 
   // ===== 控制 =====
@@ -516,7 +519,33 @@ export default function ChildTvAdminPage() {
         </div>
       )}
 
-      {/* 实时状态 + 远程控制 */}
+      {/* Tab 切换 */}
+      <div className="mb-6 flex flex-wrap items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
+        {(
+          [
+            ['console', '控制台', MonitorPlay],
+            ['schedules', '时段管理', Tv],
+            ['records', '日志与统计', BarChart3],
+            ['settings', '设置', SettingsIcon],
+          ] as const
+        ).map(([key, label, Icon]) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm transition-colors ${
+              activeTab === key
+                ? 'bg-indigo-500/20 text-indigo-200 shadow-inner'
+                : 'text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* 控制台：实时状态 + 远程控制 */}
+      {activeTab === 'console' && (
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
         <Card className="p-6">
           <div className="mb-4 flex items-center justify-between">
@@ -669,134 +698,23 @@ export default function ChildTvAdminPage() {
           </div>
         </Card>
       </div>
+      )}
 
-      {/* 时段管理表单 */}
-      <Card className="mb-6 p-6">
-        <h3 className="mb-4 text-sm font-medium text-zinc-300">
-          {editing ? `编辑时段：${form.name}` : '新增时段'}
-        </h3>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">时段名称</label>
-            <input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="如：纪录片 / 英语 / 喜马拉雅"
-              className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">开始时间（HH:MM）</label>
-            <input
-              type="time"
-              value={form.start}
-              onChange={(e) => setForm({ ...form, start: e.target.value })}
-              className="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">时长（分钟，1-1440，支持跨天）</label>
-            <input
-              type="number"
-              min={1}
-              max={1440}
-              value={form.durationMinutes}
-              onChange={(e) => setForm({ ...form, durationMinutes: Number(e.target.value) })}
-              className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">类型</label>
-            <select
-              value={form.mediaType}
-              onChange={(e) => setForm({ ...form, mediaType: e.target.value as 'video' | 'audio' })}
-              className="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none"
-            >
-              <option value="video">视频</option>
-              <option value="audio">音频</option>
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-zinc-400">内容来源</label>
-            <select
-              value={form.sourceType}
-              onChange={(e) => setForm({ ...form, sourceType: e.target.value as 'folder' | 'file' | 'url' })}
-              className="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none"
-            >
-              <option value="folder">合集（文件夹）</option>
-              <option value="file">单文件</option>
-              <option value="url">URL 链接</option>
-            </select>
-          </div>
-          <div className="flex items-end">
-            <label className="flex items-center gap-2 text-sm text-zinc-300">
-              <Switch
-                checked={form.enabled}
-                onCheckedChange={(v) => setForm({ ...form, enabled: v })}
-              />
-              启用
-            </label>
-          </div>
-        </div>
-
-        <div className="mt-4">
-          <label className="mb-1 block text-xs text-zinc-400">
-            {form.sourceType === 'url'
-              ? '视频 / 音频直链（http/https）'
-              : form.sourceType === 'file'
-                ? '媒体文件路径'
-                : '文件夹路径（自动扫描全部音视频按文件名排序循环播放）'}
-          </label>
-          <div className="flex gap-2">
-            <input
-              value={form.source}
-              onChange={(e) => setForm({ ...form, source: e.target.value })}
-              placeholder={
-                form.sourceType === 'url'
-                  ? 'https://example.com/video.mp4'
-                  : form.sourceType === 'file'
-                    ? 'C:\\Videos\\episode01.mp4'
-                    : 'D:\\儿童内容\\纪录片'
-              }
-              className="flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-            />
-            {form.sourceType !== 'url' && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setBrowseMode(form.sourceType as 'folder' | 'file');
-                  setBrowseOpen(true);
-                }}
-              >
-                <FolderOpen className="mr-1 h-3.5 w-3.5" /> 浏览…
-              </Button>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-4 flex gap-2">
-          <Button onClick={handleSave} disabled={saveMutation.isPending}>
-            {editing ? '保存修改' : '创建时段'}
-          </Button>
-          {editing && (
-            <Button variant="ghost" onClick={() => setForm(EMPTY_FORM)}>
-              取消编辑
+      {/* 时段管理 */}
+      {activeTab === 'schedules' && (
+        <Card className="mb-6 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
+            <h3 className="text-sm font-medium text-zinc-300">时段列表</h3>
+            <Button size="sm" onClick={() => { setForm(EMPTY_FORM); setFormOpen(true); }}>
+              <Plus className="mr-1 h-3.5 w-3.5" /> 添加时段
             </Button>
-          )}
-        </div>
-      </Card>
-
-      {/* 时段列表 */}
-      <Card className="mb-6 overflow-hidden">
-        <div className="border-b border-white/5 px-6 py-4">
-          <h3 className="text-sm font-medium text-zinc-300">时段列表</h3>
-        </div>
-        <div className="divide-y divide-white/5">
-          {schedules.length === 0 && (
-            <div className="px-6 py-8 text-center text-sm text-zinc-500">
-              还没有时段，先在上方创建一个
-            </div>
-          )}
+          </div>
+          <div className="divide-y divide-white/5">
+            {schedules.length === 0 && (
+              <div className="px-6 py-8 text-center text-sm text-zinc-500">
+                还没有时段，点击右上角「添加时段」创建一个
+              </div>
+            )}
           {schedules.map((s) => (
             <div key={s.id} className="flex flex-wrap items-center gap-3 px-6 py-3">
               <div className="min-w-[130px]">
@@ -832,8 +750,10 @@ export default function ChildTvAdminPage() {
           ))}
         </div>
       </Card>
+      )}
 
       {/* 日志 + 统计 */}
+      {activeTab === 'records' && (
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="p-6">
           <h3 className="mb-4 flex items-center gap-2 text-sm font-medium text-zinc-300">
@@ -877,8 +797,10 @@ export default function ChildTvAdminPage() {
           </div>
         </Card>
       </div>
+      )}
 
       {/* 设置 */}
+      {activeTab === 'settings' && (
       <Card className="mt-6 p-6">
         <h3 className="mb-4 flex items-center gap-2 text-sm font-medium text-zinc-300">
           <SettingsIcon className="h-4 w-4 text-amber-400" /> 设置
@@ -939,6 +861,135 @@ export default function ChildTvAdminPage() {
           </Button>
         </div>
       </Card>
+      )}
+
+      {/* 时段新增 / 编辑弹框 */}
+      {formOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setFormOpen(false)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900/95 p-5 shadow-2xl backdrop-blur-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-zinc-100">
+                {editing ? `编辑时段：${form.name || '…'}` : '新增时段'}
+              </h3>
+              <button onClick={() => setFormOpen(false)} className="text-zinc-500 hover:text-zinc-300">✕</button>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">时段名称</label>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="如：纪录片 / 英语 / 喜马拉雅"
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">开始时间（HH:MM）</label>
+                <input
+                  type="time"
+                  value={form.start}
+                  onChange={(e) => setForm({ ...form, start: e.target.value })}
+                  className="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">时长（分钟，1-1440，支持跨天）</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={form.durationMinutes}
+                  onChange={(e) => setForm({ ...form, durationMinutes: Number(e.target.value) })}
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">类型</label>
+                <select
+                  value={form.mediaType}
+                  onChange={(e) => setForm({ ...form, mediaType: e.target.value as 'video' | 'audio' })}
+                  className="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none"
+                >
+                  <option value="video">视频</option>
+                  <option value="audio">音频</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">内容来源</label>
+                <select
+                  value={form.sourceType}
+                  onChange={(e) => setForm({ ...form, sourceType: e.target.value as 'folder' | 'file' | 'url' })}
+                  className="w-full rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none"
+                >
+                  <option value="folder">合集（文件夹）</option>
+                  <option value="file">单文件</option>
+                  <option value="url">URL 链接</option>
+                </select>
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 text-sm text-zinc-300">
+                  <Switch
+                    checked={form.enabled}
+                    onCheckedChange={(v) => setForm({ ...form, enabled: v })}
+                  />
+                  启用
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label className="mb-1 block text-xs text-zinc-400">
+                {form.sourceType === 'url'
+                  ? '视频 / 音频直链（http/https）'
+                  : form.sourceType === 'file'
+                    ? '媒体文件路径'
+                    : '文件夹路径（自动扫描全部音视频按文件名排序循环播放）'}
+              </label>
+              <div className="flex gap-2">
+                <input
+                  value={form.source}
+                  onChange={(e) => setForm({ ...form, source: e.target.value })}
+                  placeholder={
+                    form.sourceType === 'url'
+                      ? 'https://example.com/video.mp4'
+                      : form.sourceType === 'file'
+                        ? 'C:\\Videos\\episode01.mp4'
+                        : 'D:\\儿童内容\\纪录片'
+                  }
+                  className="flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+                {form.sourceType !== 'url' && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setBrowseMode(form.sourceType as 'folder' | 'file');
+                      setBrowseOpen(true);
+                    }}
+                  >
+                    <FolderOpen className="mr-1 h-3.5 w-3.5" /> 浏览…
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <Button onClick={handleSave} disabled={saveMutation.isPending}>
+                {editing ? '保存修改' : '创建时段'}
+              </Button>
+              <Button variant="ghost" onClick={() => setFormOpen(false)}>
+                取消
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <BrowseDialog
         open={browseOpen}
