@@ -170,4 +170,11 @@ export class ChildTvController {
     this.childTvService.requireAuth(req);
     return this.childTvService.getStats();
   }
+
+  /** 打开本插件服务文件所在文件夹 */
+  @Post('open-data-dir')
+  openDataDir(@Req() req: Request): { success: boolean; dataDir: string } {
+    this.childTvService.requireAuth(req);
+    return this.childTvService.openDataDir();
+  }
 }

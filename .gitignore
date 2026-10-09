@@ -17,6 +17,9 @@ build/
 # Local runtime data — personal data, password hashes, JWT secrets. Never commit.
 user-data/
 
+# 插件本地服务数据（child-tv 等插件自身目录下的运行时数据）
+server/modules/*/data/
+
 # Local DB credentials
 drizzle.config.json
 

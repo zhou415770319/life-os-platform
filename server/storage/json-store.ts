@@ -8,9 +8,11 @@ import * as path from 'path';
 export class JsonStore<T extends { id: string }> {
   private readonly filePath: string;
 
-  constructor(fileName: string) {
+  constructor(fileName: string, dirOverride?: string) {
     const dir =
-      process.env.STORAGE_DATA_DIR || path.join(process.cwd(), 'user-data');
+      dirOverride ||
+      process.env.STORAGE_DATA_DIR ||
+      path.join(process.cwd(), 'user-data');
     fs.mkdirSync(dir, { recursive: true });
     this.filePath = path.join(dir, fileName);
   }

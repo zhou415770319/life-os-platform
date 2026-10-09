@@ -187,3 +187,11 @@ export async function childTvUpdateAccount(dto: { password?: string; pin?: strin
     data: dto,
   });
 }
+
+/** 打开本插件服务文件所在文件夹 */
+export async function childTvOpenDataDir(): Promise<{ success: boolean; dataDir: string }> {
+  return request<{ success: boolean; dataDir: string }>({
+    url: '/api/child-tv/open-data-dir',
+    method: 'POST',
+  });
+}

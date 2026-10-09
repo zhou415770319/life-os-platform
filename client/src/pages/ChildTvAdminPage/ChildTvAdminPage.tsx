@@ -250,6 +250,24 @@ export default function ChildTvAdminPage() {
     enabled: !!token,
   });
 
+  // ===== 打开所在文件夹 =====
+  const [openingDir, setOpeningDir] = useState(false);
+  const handleOpenDataDir = useCallback(async () => {
+    setOpeningDir(true);
+    try {
+      const res = await childTvApi.childTvOpenDataDir();
+      if (res.success) {
+        toast.success(`已打开插件数据文件夹：${res.dataDir}`);
+      } else {
+        toast.error('打开文件夹失败');
+      }
+    } catch {
+      toast.error('打开文件夹失败');
+    } finally {
+      setOpeningDir(false);
+    }
+  }, []);
+
   // ===== 登录 =====
   const loginMutation = useMutation({
     mutationFn: () => childTvApi.childTvLogin(loginName, loginPwd),
@@ -501,9 +519,19 @@ export default function ChildTvAdminPage() {
       {/* 实时状态 + 远程控制 */}
       <div className="mb-6 grid gap-6 lg:grid-cols-2">
         <Card className="p-6">
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-medium text-zinc-300">
-            <MonitorPlay className="h-4 w-4 text-indigo-400" /> 实时状态
-          </h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 text-sm font-medium text-zinc-300">
+              <MonitorPlay className="h-4 w-4 text-indigo-400" /> 实时状态
+            </h3>
+            <button
+              onClick={handleOpenDataDir}
+              disabled={openingDir}
+              className="flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              {openingDir ? '打开中…' : '打开所在文件夹'}
+            </button>
+          </div>
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-4 py-3">
               <span className="text-zinc-400">播放状态</span>

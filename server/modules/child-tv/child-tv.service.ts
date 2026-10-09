@@ -60,10 +60,12 @@ const SECRET_FILE = 'child-tv-secret.txt';
 @Injectable()
 export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('ChildTv');
-  private readonly dataDir = path.resolve(process.cwd(), 'user-data');
-  private readonly schedulesStore = new JsonStore<ChildTvSchedule>('child-tv-schedules.json');
-  private readonly logsStore = new JsonStore<ChildTvLogEntry>('child-tv-log.json');
-  private readonly statsStore = new JsonStore<ChildTvStatsEntry>('child-tv-stats.json');
+  /** 服务/数据文件统一放在插件自身目录下（server/modules/child-tv/data） */
+  private readonly dataDir = path.resolve(process.cwd(), 'server/modules/child-tv/data');
+  private readonly legacyDataDir = path.resolve(process.cwd(), 'user-data');
+  private readonly schedulesStore = new JsonStore<ChildTvSchedule>('child-tv-schedules.json', this.dataDir);
+  private readonly logsStore = new JsonStore<ChildTvLogEntry>('child-tv-log.json', this.dataDir);
+  private readonly statsStore = new JsonStore<ChildTvStatsEntry>('child-tv-stats.json', this.dataDir);
 
   private authFile = path.join(this.dataDir, 'child-tv-auth.json');
   private settingsFile = path.join(this.dataDir, 'child-tv-settings.json');
@@ -81,10 +83,56 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
 
   constructor() {
     fs.mkdirSync(this.dataDir, { recursive: true });
+    this.migrateLegacyFiles();
     this.secret = this.loadOrCreateSecret();
     this.ensureAuthFile();
     this.ensureSettingsFile();
     this.ensureSeedSchedules();
+  }
+
+  /** 将旧版本存放在 user-data/ 根目录的本插件文件迁移到插件目录下（文件已存在则不覆盖） */
+  private migrateLegacyFiles(): void {
+    const legacyFiles = [
+      'child-tv-schedules.json',
+      'child-tv-log.json',
+      'child-tv-stats.json',
+      'child-tv-auth.json',
+      'child-tv-settings.json',
+      'child-tv-secret.txt',
+      'child-tv-playlist.m3u',
+    ];
+    for (const name of legacyFiles) {
+      const src = path.join(this.legacyDataDir, name);
+      const dst = path.join(this.dataDir, name);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        try {
+          fs.copyFileSync(src, dst);
+          this.logger.log(`已迁移 ${name} → ${this.dataDir}`);
+        } catch (e) {
+          this.logger.warn(`迁移 ${name} 失败: ${(e as Error).message}`);
+        }
+      }
+    }
+  }
+
+  /** 打开本插件服务文件所在文件夹（Windows 资源管理器；其他平台仅返回路径） */
+  openDataDir(): { success: boolean; dataDir: string } {
+    try {
+      if (process.platform === 'win32') {
+        const { spawn } = require('child_process') as typeof import('child_process');
+        spawn('explorer.exe', [this.dataDir], { detached: true, stdio: 'ignore' }).unref();
+      } else if (process.platform === 'darwin') {
+        const { spawn } = require('child_process') as typeof import('child_process');
+        spawn('open', [this.dataDir], { detached: true, stdio: 'ignore' }).unref();
+      } else {
+        const { spawn } = require('child_process') as typeof import('child_process');
+        spawn('xdg-open', [this.dataDir], { detached: true, stdio: 'ignore' }).unref();
+      }
+      return { success: true, dataDir: this.dataDir };
+    } catch (e) {
+      this.logger.warn(`打开数据目录失败: ${(e as Error).message}`);
+      return { success: false, dataDir: this.dataDir };
+    }
   }
 
   // ==================== 生命周期 ====================
