@@ -270,22 +270,30 @@ const ReviewBoardPage = () => {
     toast.success('已粘贴并转换为 Markdown');
   }
 
-  /** 快捷键：Ctrl/Cmd + Shift + T 在光标处插入待办 [ ] */
+  /** 快捷键：Ctrl/Cmd + Shift + T 在当前行的行首插入待办 [ ] */
   function handleEditorKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'T' || e.key === 't')) {
       e.preventDefault();
       const ta = e.currentTarget;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      const selected = ta.value.slice(start, end);
-      const insert = selected ? `[ ] ${selected}` : '[ ] ';
-      const next = ta.value.slice(0, start) + insert + ta.value.slice(end);
+      const value = ta.value;
+      const caret = ta.selectionStart;
+      // 找到光标所在行的行首（跳过行首空白）
+      const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+      let contentStart = lineStart;
+      while (contentStart < value.length && /\s/.test(value[contentStart])) contentStart++;
+      // 该行已是待办则跳过，避免重复插入
+      if (/^\[[ xX]\]\s/.test(value.slice(contentStart))) {
+        toast.success('当前行已是待办');
+        return;
+      }
+      const insert = '[ ] ';
+      const next = value.slice(0, contentStart) + insert + value.slice(contentStart);
       scheduleSave(level, panelKey, next);
       requestAnimationFrame(() => {
-        ta.selectionStart = ta.selectionEnd = start + insert.length;
+        ta.selectionStart = ta.selectionEnd = contentStart + insert.length;
         ta.focus();
       });
-      toast.success('已插入待办 [ ]，回车后继续输入任务内容');
+      toast.success('已在当前行行首插入待办 [ ]');
     }
   }
 
@@ -545,7 +553,7 @@ const ReviewBoardPage = () => {
                           <kbd className="rounded border border-white/15 bg-black/25 px-1.5 py-0.5 font-mono text-[10px] text-zinc-200">
                             Ctrl/⌘+Shift+T
                           </kbd>
-                          <div className="mt-0.5 text-zinc-500">在光标处插入 [ ]</div>
+                          <div className="mt-0.5 text-zinc-500">在当前行行首插入 [ ]</div>
                         </div>
                         <div>
                           <span className="text-zinc-500">语法</span>
