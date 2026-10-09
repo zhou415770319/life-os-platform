@@ -270,9 +270,9 @@ const ReviewBoardPage = () => {
     toast.success('已粘贴并转换为 Markdown');
   }
 
-  /** 快捷键：Ctrl/Cmd + Shift + T 在当前行的行首插入待办 [ ] */
+  /** 快捷键：Alt + X 在当前行的行首插入待办 [ ] */
   function handleEditorKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'x' || e.key === 'X')) {
       e.preventDefault();
       const ta = e.currentTarget;
       const value = ta.value;
@@ -551,7 +551,7 @@ const ReviewBoardPage = () => {
                       <div className="space-y-1.5">
                         <div>
                           <kbd className="rounded border border-white/15 bg-black/25 px-1.5 py-0.5 font-mono text-[10px] text-zinc-200">
-                            Ctrl/⌘+Shift+T
+                            Alt+X
                           </kbd>
                           <div className="mt-0.5 text-zinc-500">在当前行行首插入 [ ]</div>
                         </div>
@@ -573,7 +573,7 @@ const ReviewBoardPage = () => {
                       onChange={(e) => scheduleSave(level, panelKey, e.target.value)}
                       onPaste={handlePaste}
                       onKeyDown={handleEditorKeyDown}
-                      placeholder={'从外部复制 Markdown 或富文本直接粘贴，自动转换\n\n任务清单：\n[ ] 晨跑 30 分钟\n[x] 阅读 20 页\n\n快捷键 Ctrl/⌘+Shift+T 插入待办'}
+                      placeholder={'从外部复制 Markdown 或富文本直接粘贴，自动转换\n\n任务清单：\n[ ] 晨跑 30 分钟\n[x] 阅读 20 页\n\n快捷键 Alt+X 在当前行行首插入待办'}
                       className="h-[380px] w-full resize-none rounded-lg border border-white/10 bg-black/20 p-3 font-mono text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600 focus:border-emerald-500/50"
                     />
                   </div>
