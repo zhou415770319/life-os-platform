@@ -1,8 +1,9 @@
-﻿import { Controller, Get, Post, Delete, Param, Body, Query } from '@nestjs/common';
+﻿import { Controller, Get, Post, Patch, Delete, Param, Body, Query } from '@nestjs/common';
 import { NeedLogin } from '../../platform-local/need-login';
 import { HabitsService } from './habits.service';
 import {
   CreateHabitDtoClass,
+  UpdateHabitDtoClass,
   ToggleRecordDtoClass,
   CreateEnergyDtoClass,
 } from './habits.dto';
@@ -37,6 +38,14 @@ export class HabitsController {
   async remove(@Param('id') id: string): Promise<{ success: true }> {
     await this.habitsService.deleteHabit(id);
     return { success: true };
+  }
+
+  @Patch(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateHabitDtoClass,
+  ): Promise<LifeHabit> {
+    return this.habitsService.updateHabit(id, dto);
   }
 
   @Get('records')

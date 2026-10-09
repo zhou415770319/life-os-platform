@@ -96,6 +96,27 @@ export class HabitsService {
     this.logger.log(`Habit deleted: ${id}`);
   }
 
+  async updateHabit(id: string, dto: Partial<CreateHabitDto>): Promise<LifeHabit> {
+    const patch: Record<string, unknown> = {};
+    if (dto.name !== undefined) patch.name = dto.name;
+    if (dto.icon !== undefined) patch.icon = dto.icon;
+    if (dto.color !== undefined) patch.color = dto.color;
+    if (dto.frequency !== undefined) patch.frequency = dto.frequency;
+    if (Object.keys(patch).length === 0) {
+      throw new BadRequestException('没有需要更新的字段');
+    }
+    const rows = await this.db
+      .update(lifeHabits)
+      .set(patch)
+      .where(eq(lifeHabits.id, id))
+      .returning();
+    if (rows.length === 0) {
+      throw new NotFoundException('习惯不存在');
+    }
+    this.logger.log(`Habit updated: ${id}`);
+    return this.toHabit(rows[0]);
+  }
+
   async getRecordsByDate(date: string): Promise<{ items: HabitRecord[]; total: number }> {
     if (!date) {
       throw new BadRequestException('日期参数不能为空');

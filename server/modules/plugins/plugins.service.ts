@@ -374,7 +374,9 @@ export class PluginsService implements OnModuleInit {
       .where(eq(lifePluginConfig.enabled, true));
     const items: InstalledPlugin[] = rows.map((row) => ({
       ...this.mapRowToPlugin(row),
-      installedAt: row.createdAt.toISOString(),
+      installedAt: row.createdAt
+        ? row.createdAt.toISOString()
+        : (row.updatedAt ? row.updatedAt.toISOString() : ''),
       isCore: row.pluginKey === CORE_PLUGIN_KEY,
     }));
     return { items, total: items.length };
@@ -401,6 +403,8 @@ export class PluginsService implements OnModuleInit {
           .set({
             enabled: true,
             lifecycleStatus: 'loading',
+            // 安装时记录安装时间（旧数据 createdAt 可能缺失）
+            createdAt: existing[0].createdAt ?? new Date(),
           })
           .where(eq(lifePluginConfig.pluginKey, pluginKey))
           .returning();

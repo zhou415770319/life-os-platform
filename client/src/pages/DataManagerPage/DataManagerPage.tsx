@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Database,
   Cloud,
@@ -35,19 +35,25 @@ const DataManagerPage = () => {
   const [stats, setStats] = useState<DataExportResult | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
 
-  const handleViewStats = async () => {
+  const handleViewStats = async (showToast = false) => {
     setLoadingStats(true);
     try {
       const data = await dataManagerApi.exportAllData();
       setStats(data);
-      toast.success('数据统计已加载');
+      if (showToast) toast.success('数据统计已刷新');
     } catch (err) {
       logger.error('Export all data failed', { error: String(err) });
-      toast.error('加载数据统计失败');
+      if (showToast) toast.error('加载数据统计失败');
     } finally {
       setLoadingStats(false);
     }
   };
+
+  // 进入页面自动加载数据统计
+  useEffect(() => {
+    void handleViewStats(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRefreshStats = async () => {
     if (!stats) return;
@@ -89,7 +95,7 @@ const DataManagerPage = () => {
   const dataModules = stats
     ? [
         { name: '人生目标', count: stats.goals.length },
-        { name: '习惯打卡', count: stats.habits.length },
+        { name: '习惯定义', count: stats.habits.length },
         { name: '打卡记录', count: stats.habitRecords.length },
         { name: '精力记录', count: stats.energyRecords.length },
         { name: '闪念笔记', count: stats.notes.length },
@@ -162,13 +168,13 @@ const DataManagerPage = () => {
               {!stats && !loadingStats ? (
                 <Button
                   variant="outline"
-                  onClick={handleViewStats}
+                  onClick={() => handleViewStats(true)}
                   className="w-full border-white/10 text-zinc-300 hover:text-white hover:border-white/20 hover:bg-white/[0.05]"
                 >
                   <BarChart3 className="w-4 h-4" />
                   查看数据统计
                 </Button>
-              ) : loadingStats ? (
+              ) : loadingStats && !stats ? (
                 <div className="flex items-center justify-center py-6 text-zinc-500 text-sm">
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   加载中...
@@ -189,6 +195,20 @@ const DataManagerPage = () => {
                       </Badge>
                     </div>
                   ))}
+                  <div className="flex justify-end pt-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={loadingStats}
+                      onClick={() => handleViewStats(true)}
+                      className="text-xs text-zinc-500 hover:text-zinc-300"
+                    >
+                      <Loader2
+                        className={`w-3.5 h-3.5 mr-1.5 ${loadingStats ? 'animate-spin' : ''}`}
+                      />
+                      刷新统计
+                    </Button>
+                  </div>
                 </div>
               )}
             </CardContent>

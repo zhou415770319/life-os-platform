@@ -351,6 +351,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       pinHash: cur.pinHash, // PIN 由 updateAccount 管理
     };
     this.writeSettings(next);
+    this.mpvPathCached = undefined; // mpv 路径可能已变更，强制下次重检
     return next;
   }
 
@@ -487,8 +488,11 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   }
 
   private detectMpv(): string | null {
-    if (this.mpvPathCached !== undefined) return this.mpvPathCached;
     const settings = this.readSettings();
+    // 仅当设置未变化时使用缓存；用户新填/修改 mpv 路径后强制重新检测
+    if (this.mpvPathCached !== undefined && this.mpvPathCached === settings.mpvPath) {
+      return this.mpvPathCached;
+    }
     let found: string | null = null;
     if (settings.mpvPath && fs.existsSync(settings.mpvPath)) {
       found = settings.mpvPath;
@@ -807,6 +811,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     nextSchedule: ChildTvNextSchedule | null;
     locked: boolean;
     endsAt: string | null;
+    pinEnabled: boolean;
   } {
     const s = this.getRuntimeStatus();
     return {
@@ -816,6 +821,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       nextSchedule: s.nextSchedule,
       locked: s.locked,
       endsAt: s.endsAt,
+      pinEnabled: !!this.readAuth().pinHash,
     };
   }
 

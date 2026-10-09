@@ -6,7 +6,7 @@ import { habitsApi } from '@client/src/api';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
 import { useConfirmDialog } from '@client/src/hooks/use-confirm-dialog';
 import { getTodayDateString, formatDateShort } from '@client/src/utils/date';
-import type { LifeHabit, HabitRecord } from '@shared/api.interface';
+import type { LifeHabit, HabitRecord, UpdateHabitDto } from '@shared/api.interface';
 import {
   Tabs,
   TabsContent,
@@ -79,6 +79,19 @@ export default function HabitsPage() {
     },
   });
 
+  const updateHabitMutation = useMutation({
+    mutationFn: (payload: { id: string; dto: UpdateHabitDto }) =>
+      habitsApi.updateHabit(payload.id, payload.dto),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['habits'] });
+      toast.success('习惯已更新');
+    },
+    onError: (err: unknown) => {
+      logger.error('Update habit failed', JSON.stringify(err));
+      toast.error('更新失败');
+    },
+  });
+
   const isLoading = habitsLoading || recordsLoading;
 
   if (isLoading) {
@@ -95,6 +108,10 @@ export default function HabitsPage() {
 
   const handleCreateHabit = (_habit: LifeHabit) => {
     queryClient.invalidateQueries({ queryKey: ['habits'] });
+  };
+
+  const handleUpdateHabit = (id: string, dto: UpdateHabitDto) => {
+    updateHabitMutation.mutate({ id, dto });
   };
 
   const handleRequestDeleteHabit = async (id: string) => {
@@ -138,6 +155,7 @@ export default function HabitsPage() {
           <HabitManageTab
             habits={habits}
             onCreate={handleCreateHabit}
+            onUpdate={handleUpdateHabit}
             onDelete={handleRequestDeleteHabit}
           />
         </TabsContent>

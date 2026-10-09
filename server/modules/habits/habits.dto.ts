@@ -22,6 +22,28 @@ export class CreateHabitDtoClass {
   frequency?: string;
 }
 
+export class UpdateHabitDtoClass {
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  icon?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  color?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  frequency?: string;
+}
+
 export class ToggleRecordDtoClass {
   @IsString()
   @IsNotEmpty()

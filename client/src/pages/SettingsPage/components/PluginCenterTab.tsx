@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Sparkles,
   Download,
@@ -73,6 +73,20 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
 
   const installedCount = installedPlugins.filter((p) => p.enabled).length;
 
+  // 已安装插件按安装时间降序排最前，未安装保持原序在后
+  const sortedPlugins = useMemo(() => {
+    const installedMap = new Map(installedPlugins.map((p) => [p.pluginKey, p]));
+    const installedList = plugins
+      .filter((p) => installedMap.has(p.pluginKey))
+      .sort((a, b) => {
+        const at = installedMap.get(a.pluginKey)?.installedAt ?? '';
+        const bt = installedMap.get(b.pluginKey)?.installedAt ?? '';
+        return bt.localeCompare(at);
+      });
+    const notInstalledList = plugins.filter((p) => !installedMap.has(p.pluginKey));
+    return [...installedList, ...notInstalledList];
+  }, [plugins, installedPlugins]);
+
   return (
     <div className="space-y-6">
       {/* 统一插件市场：插件市场 + 已安装合并 */}
@@ -94,7 +108,7 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {plugins.map((plugin) => {
+              {sortedPlugins.map((plugin) => {
                 const Icon = getPluginIcon(plugin.config.cardIcon);
                 const installed = getInstalled(plugin.pluginKey);
                 const enabled = isInstalled(plugin.pluginKey);
@@ -143,6 +157,11 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
                             <span className="px-1.5 py-0.5 rounded bg-white/5">
                               {categoryLabels[plugin.category] ?? plugin.category}
                             </span>
+                            {installed?.installedAt && (
+                              <span className="px-1.5 py-0.5 rounded bg-white/5">
+                                安装于 {new Date(installed.installedAt).toLocaleDateString('zh-CN')}
+                              </span>
+                            )}
                             <span className="inline-flex items-center gap-1 text-indigo-300/80">
                               <Info className="w-3 h-3" /> 点击查看详情
                             </span>

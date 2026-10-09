@@ -4,6 +4,7 @@ import type {
   HabitRecord,
   EnergyRecord,
   CreateHabitDto,
+  UpdateHabitDto,
   CreateEnergyDto,
   ListResponse,
 } from '@shared/api.interface';
@@ -28,6 +29,15 @@ export async function createHabit(dto: CreateHabitDto): Promise<LifeHabit> {
 
 export async function deleteHabit(id: string): Promise<void> {
   await axiosForBackend({ url: `/api/habits/${id}`, method: 'DELETE' });
+}
+
+export async function updateHabit(id: string, dto: UpdateHabitDto): Promise<LifeHabit> {
+  const response = await axiosForBackend({
+    url: `/api/habits/${id}`,
+    method: 'PATCH',
+    data: dto,
+  });
+  return response.data;
 }
 
 export async function getHabitRecords(date: string): Promise<ListResponse<HabitRecord>> {

@@ -139,6 +139,7 @@ export async function childTvWatchStatus(): Promise<{
   nextSchedule: { name: string; startLabel: string; startsInMinutes: number } | null;
   locked: boolean;
   endsAt: string | null;
+  pinEnabled: boolean;
 }> {
   return request({
     url: '/api/child-tv/watch-status',

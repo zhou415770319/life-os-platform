@@ -1,8 +1,21 @@
 import { useState, useEffect } from 'react';
-import { Plus, X } from 'lucide-react';
+import { CalendarIcon, Plus, X } from 'lucide-react';
 import { Button } from '@client/src/components/ui/button';
 import { Input } from '@client/src/components/ui/input';
 import { Textarea } from '@client/src/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@client/src/components/ui/select';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@client/src/components/ui/popover';
+import { Calendar } from '@client/src/components/ui/calendar';
 import {
   Dialog,
   DialogContent,
@@ -12,6 +25,15 @@ import {
   DialogTrigger,
 } from '@client/src/components/ui/dialog';
 import type { LifeGoal, Milestone, CreateGoalDto, UpdateGoalDto } from '@shared/api.interface';
+
+const GOAL_CATEGORIES = ['成长', '健康', '财富', '事业', '家庭', '学习', '习惯', '其他'];
+
+function toDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 interface FormState {
   title: string;
@@ -148,19 +170,51 @@ export function GoalFormDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-zinc-400">分类</label>
-              <Input
-                value={form.category}
-                onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-                placeholder="如：成长 / 健康"
-              />
+              <Select
+                value={form.category || undefined}
+                onValueChange={(v) => setForm((p) => ({ ...p, category: v }))}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="选择分类" />
+                </SelectTrigger>
+                <SelectContent>
+                  {GOAL_CATEGORIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-zinc-400">截止日期</label>
-              <Input
-                type="date"
-                value={form.deadline}
-                onChange={(e) => setForm((p) => ({ ...p, deadline: e.target.value }))}
-              />
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={`w-full justify-start text-left font-normal ${
+                      form.deadline ? 'text-zinc-100' : 'text-zinc-500'
+                    }`}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {form.deadline || '选择日期'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={form.deadline ? new Date(`${form.deadline}T00:00:00`) : undefined}
+                    onSelect={(d) =>
+                      setForm((p) => ({
+                        ...p,
+                        deadline: d ? toDateString(d) : '',
+                      }))
+                    }
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
 

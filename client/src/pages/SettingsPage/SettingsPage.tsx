@@ -53,7 +53,10 @@ const SettingsPage = () => {
     setLoadingInstalled(true);
     try {
       const data = await pluginsApi.getInstalledPlugins();
-      setInstalledPlugins(data.items);
+      const items = [...data.items].sort((a, b) =>
+        (b.installedAt || '').localeCompare(a.installedAt || ''),
+      );
+      setInstalledPlugins(items);
     } catch (err) {
       logger.error('Fetch installed plugins failed', { error: String(err) });
       toast.error('加载已安装插件失败');

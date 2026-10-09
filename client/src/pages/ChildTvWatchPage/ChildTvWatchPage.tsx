@@ -1,16 +1,7 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Clock, Lock, MonitorPlay, Tv } from 'lucide-react';
 import { childTvApi } from '@client/src/api';
-
-function useNow(intervalMs: number): Date {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), intervalMs);
-    return () => clearInterval(t);
-  }, [intervalMs]);
-  return now;
-}
 
 function formatClock(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -27,9 +18,21 @@ export default function ChildTvWatchPage() {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
   const [authed, setAuthed] = useState(false);
-  const now = useNow(1000);
+  const clockRef = useRef<HTMLSpanElement>(null);
+  const nowRef = useRef(new Date());
 
-  // 观看页免登录只读状态
+  // 时钟只更新文本节点，避免每秒全量重渲染
+  useEffect(() => {
+    const t = setInterval(() => {
+      nowRef.current = new Date();
+      if (clockRef.current) {
+        clockRef.current.textContent = formatClock(nowRef.current);
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 观看页免登录只读状态（含 PIN 开关，无需鉴权接口）
   const { data: status, isFetching } = useQuery({
     queryKey: ['child-tv-watch'],
     queryFn: childTvApi.childTvWatchStatus,
@@ -41,15 +44,9 @@ export default function ChildTvWatchPage() {
   const currentTitle = status?.currentTitle ?? '';
   const remaining = status?.remainingMinutes ?? null;
   const next = status?.nextSchedule ?? null;
+  const pinEnabled = !!status?.pinEnabled;
+  const now = nowRef.current;
 
-  // 免登录探测 PIN 是否开启
-  const { data: auth } = useQuery({
-    queryKey: ['child-tv-watch-auth'],
-    queryFn: childTvApi.childTvMe,
-    refetchInterval: 30_000,
-  });
-
-  const pinEnabled = !!auth?.pinEnabled;
   const showPin = pinEnabled && !authed && !pinMode;
 
   useEffect(() => {
@@ -116,10 +113,12 @@ export default function ChildTvWatchPage() {
         )}
       </div>
 
-      {/* 顶部时钟 */}
+      {/* 顶部时钟：ref 直更，不触发重渲染 */}
       <div className="absolute top-8 left-1/2 flex -translate-x-1/2 items-center gap-2 text-zinc-500">
         <Clock className="h-4 w-4" />
-        <span className="font-mono text-lg">{formatClock(now)}</span>
+        <span ref={clockRef} className="font-mono text-lg">
+          {formatClock(now)}
+        </span>
       </div>
 
       {/* 主体 */}

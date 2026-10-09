@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Plus, Trash2, Flame } from 'lucide-react';
+import { Plus, Trash2, Pencil, Flame } from 'lucide-react';
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
 import { habitsApi } from '@client/src/api';
-import type { LifeHabit, CreateHabitDto } from '@shared/api.interface';
+import type { LifeHabit, CreateHabitDto, UpdateHabitDto } from '@shared/api.interface';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -31,35 +31,63 @@ const HABIT_COLORS = [
 
 const HABIT_ICONS = ['🌅', '🏃', '📚', '💧', '🧘', '💪', '✍️', '🎯', '🌙', '☕'];
 
+const DEFAULT_FORM: CreateHabitDto = {
+  name: '',
+  icon: '🌅',
+  color: '#6366f1',
+  frequency: 'daily',
+};
+
 interface HabitManageTabProps {
   habits: LifeHabit[];
   onCreate: (habit: LifeHabit) => void;
+  onUpdate: (id: string, dto: UpdateHabitDto) => void;
   onDelete: (id: string) => void;
 }
 
 export default function HabitManageTab({
   habits,
   onCreate,
+  onUpdate,
   onDelete,
 }: HabitManageTabProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState<CreateHabitDto>({
-    name: '',
-    icon: '🌅',
-    color: '#6366f1',
-    frequency: 'daily',
-  });
+  const [editingHabit, setEditingHabit] = useState<LifeHabit | null>(null);
+  const [form, setForm] = useState<CreateHabitDto>(DEFAULT_FORM);
+
+  const openCreateDialog = () => {
+    setEditingHabit(null);
+    setForm(DEFAULT_FORM);
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = (habit: LifeHabit) => {
+    setEditingHabit(habit);
+    setForm({
+      name: habit.name,
+      icon: habit.icon || '🌅',
+      color: habit.color || '#6366f1',
+      frequency: habit.frequency || 'daily',
+    });
+    setDialogOpen(true);
+  };
 
   const handleSubmit = async () => {
     if (!form.name.trim()) {
       toast.error('请输入习惯名称');
       return;
     }
+    if (editingHabit) {
+      onUpdate(editingHabit.id, form);
+      setDialogOpen(false);
+      setForm(DEFAULT_FORM);
+      return;
+    }
     try {
       const habit = await habitsApi.createHabit(form);
       onCreate(habit);
       setDialogOpen(false);
-      setForm({ name: '', icon: '🌅', color: '#6366f1', frequency: 'daily' });
+      setForm(DEFAULT_FORM);
       toast.success('习惯添加成功');
     } catch (err) {
       logger.error('Create habit failed', JSON.stringify(err));
@@ -72,7 +100,7 @@ export default function HabitManageTab({
       <div className="flex justify-end mb-6">
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button onClick={openCreateDialog}>
               <Plus className="w-4 h-4" />
               添加习惯
             </Button>
@@ -81,7 +109,7 @@ export default function HabitManageTab({
             className="bg-[hsl(240_6%_8%_/_0.8)] border-white/10 text-zinc-50 backdrop-blur-xl"
           >
             <DialogHeader>
-              <DialogTitle>添加新习惯</DialogTitle>
+              <DialogTitle>{editingHabit ? '编辑习惯' : '添加新习惯'}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2">
               <div>
@@ -156,7 +184,9 @@ export default function HabitManageTab({
               <Button variant="outline" onClick={() => setDialogOpen(false)}>
                 取消
               </Button>
-              <Button onClick={handleSubmit}>确认添加</Button>
+              <Button onClick={handleSubmit}>
+                {editingHabit ? '保存修改' : '确认添加'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -209,13 +239,22 @@ export default function HabitManageTab({
                     </Badge>
                   </div>
                 </div>
-                <button
-                  onClick={() => onDelete(habit.id)}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-rose-400 transition-opacity"
-                  aria-label="delete habit"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => openEditDialog(habit)}
+                    className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-sky-400 transition-opacity"
+                    aria-label="edit habit"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => onDelete(habit.id)}
+                    className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-rose-400 transition-opacity"
+                    aria-label="delete habit"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
           ))

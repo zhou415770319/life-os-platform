@@ -19,11 +19,11 @@ import BackgroundGlow from '@client/src/components/ui/background-glow';
 
 const coreNavItems = [
   { path: '/', label: '人生看板', icon: LayoutDashboard, key: 'dashboard' },
-  { path: '/insights', label: '数据洞察', icon: TrendingUp, key: 'insights' },
-  { path: '/review', label: '自动复盘', icon: RefreshCcw, key: 'review' },
   { path: '/goals', label: '愿景目标', icon: Target, key: 'goals' },
   { path: '/habits', label: '微习惯', icon: Clock, key: 'habits' },
   { path: '/notes', label: '认知笔记', icon: Brain, key: 'notes' },
+  { path: '/insights', label: '数据洞察', icon: TrendingUp, key: 'insights' },
+  { path: '/review', label: '自动复盘', icon: RefreshCcw, key: 'review' },
 ];
 
 // 系统设置分组：仅保留「系统设置」一个入口，插件中心/人生日志/数据管理均以页签形式收在设置页内

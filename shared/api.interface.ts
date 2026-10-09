@@ -62,6 +62,13 @@ export interface CreateHabitDto {
   frequency?: string;
 }
 
+export interface UpdateHabitDto {
+  name?: string;
+  icon?: string;
+  color?: string;
+  frequency?: string;
+}
+
 export interface EnergyRecord {
   id: string;
   recordDate: string;
