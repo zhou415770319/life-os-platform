@@ -178,6 +178,8 @@ export interface PluginCardConfig {
   gradientTo: string;
   /** 是否参与自动复盘 / 数据洞察分析（需在插件设置中手动开启，默认关闭） */
   analysisEnabled?: boolean;
+  /** 插件来源：market 为在线市场安装的第三方插件 */
+  source?: 'builtin' | 'market';
 }
 
 export interface UpdatePluginDto {
@@ -206,6 +208,42 @@ export interface AvailablePlugin {
 export interface InstalledPlugin extends PluginConfig {
   installedAt: string;
   isCore: boolean;
+}
+
+// ===== 在线插件市场 (Market) =====
+export interface MarketAiMethod {
+  /** 短 ID（不含插件前缀），注册时自动补全为 <pluginKey>.<id> */
+  id: string;
+  name: string;
+  description: string;
+  /** 数据操作类型：add 添加 / list 查询 / update 修改 / delete 删除 */
+  kind: 'add' | 'list' | 'update' | 'delete';
+  /** 数据集合名（读写 user-data/plugins-data/<pluginKey>/<collection>.json） */
+  collection: string;
+  params: PluginMethodParam[];
+}
+
+export interface MarketPluginDef {
+  pluginKey: string;
+  name: string;
+  description: string;
+  version: string;
+  category: string;
+  cardIcon: string;
+  routePath: string;
+  gradientFrom: string;
+  gradientTo: string;
+  /** 入口 JS 文件名 */
+  entry: string;
+  /** 需要下载的文件列表（含 entry） */
+  files: string[];
+  aiMethods?: MarketAiMethod[];
+}
+
+export interface MarketPluginItem extends MarketPluginDef {
+  installed: boolean;
+  enabled: boolean;
+  installedVersion: string | null;
 }
 
 // ===== Tasks (GTD) =====

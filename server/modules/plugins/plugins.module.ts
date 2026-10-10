@@ -17,6 +17,8 @@ import { ReviewModule } from '@server/modules/review/review.module';
 import { ReviewBoardModule } from '@server/modules/review-board/review-board.module';
 import { ChildTvModule } from '@server/modules/child-tv/child-tv.module';
 import { PluginMethodRegistry } from './plugin-method.registry';
+import { MarketService } from './market.service';
+import { MarketController } from './market.controller';
 import { AiChatService } from './ai-chat.service';
 import { AiChatController } from './ai-chat.controller';
 import { AiChatHistoryService } from './ai-chat-history.service';
@@ -39,8 +41,8 @@ import { AiChatHistoryService } from './ai-chat-history.service';
     ReviewBoardModule,
     ChildTvModule,
   ],
-  controllers: [PluginsController, AiChatController],
-  providers: [PluginsService, PluginMethodRegistry, AiChatService, AiChatHistoryService],
-  exports: [PluginsService, PluginMethodRegistry],
+  controllers: [PluginsController, AiChatController, MarketController],
+  providers: [PluginsService, PluginMethodRegistry, AiChatService, AiChatHistoryService, MarketService],
+  exports: [PluginsService, PluginMethodRegistry, MarketService],
 })
 export class PluginsModule {}

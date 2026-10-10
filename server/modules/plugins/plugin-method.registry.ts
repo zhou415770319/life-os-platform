@@ -1043,6 +1043,41 @@ export class PluginMethodRegistry {
 
   // ===== Core Registry Methods =====
 
+  /**
+   * 注册在线市场插件的 AI 方法（通用数据操作，无需编写后端代码）。
+   * 方法 ID 自动补全为 <pluginKey>.<shortId>，执行时通过回调交给 MarketService。
+   */
+  registerMarketMethods(
+    pluginKey: string,
+    defs: Array<{
+      id: string;
+      name: string;
+      description: string;
+      kind: string;
+      collection: string;
+      params?: PluginMethodParam[];
+    }>,
+    execute: (
+      method: PluginMethod & { kind: string; collection: string },
+      args: Record<string, unknown>,
+      userId: string,
+    ) => Promise<unknown>,
+  ): void {
+    for (const d of defs) {
+      const method = {
+        id: `${pluginKey}.${d.id}`,
+        name: d.name,
+        description: d.description,
+        pluginKey,
+        params: d.params ?? [],
+        kind: d.kind,
+        collection: d.collection,
+      } as PluginMethod & { kind: string; collection: string };
+      this.register(method, (args, userId) => execute(method, args, userId));
+    }
+    this.logger.log(`Registered ${defs.length} market methods for plugin: ${pluginKey}`);
+  }
+
   private register(
     method: PluginMethod,
     execute: (args: Record<string, unknown>, userId: string) => Promise<unknown>,

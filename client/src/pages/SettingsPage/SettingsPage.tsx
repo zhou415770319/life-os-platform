@@ -203,6 +203,7 @@ const SettingsPage = () => {
             onUninstall={handleUninstall}
             onSuspend={handleSuspend}
             onResume={handleResume}
+            onDataChanged={refreshData}
           />
         </TabsContent>
 

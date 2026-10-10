@@ -9,6 +9,7 @@ import FinancePage from '@client/src/pages/FinancePage/FinancePage';
 import HealthPage from '@client/src/pages/HealthPage/HealthPage';
 import ReviewBoardPage from '@client/src/pages/ReviewBoardPage/ReviewBoardPage';
 import ChildTvAdminPage from '@client/src/pages/ChildTvAdminPage/ChildTvAdminPage';
+import PluginHost from '@client/src/pages/PluginHost/PluginHost';
 import { Loader2 } from 'lucide-react';
 
 const pluginPageMap: Record<string, React.ComponentType> = {
@@ -33,7 +34,7 @@ export default function DynamicPluginRoutes() {
   }, [location.pathname, enabledPlugins]);
 
   const shouldRedirect =
-    !loading && (!matchedPlugin || !pluginPageMap[matchedPlugin.pluginKey]);
+    !loading && (!matchedPlugin || (!pluginPageMap[matchedPlugin.pluginKey] && !thisIsMarketPlugin(matchedPlugin)));
 
   if (shouldRedirect) {
     if (!matchedPlugin) {
@@ -42,6 +43,11 @@ export default function DynamicPluginRoutes() {
       logger.warn(`No page component for plugin: ${matchedPlugin.pluginKey}`);
     }
     return <Navigate to="/" replace />;
+  }
+
+  if (matchedPlugin && !pluginPageMap[matchedPlugin.pluginKey]) {
+    // 在线市场插件：动态加载入口 JS
+    return <PluginHost plugin={matchedPlugin} />;
   }
 
   const PageComp = matchedPlugin
@@ -62,4 +68,9 @@ export default function DynamicPluginRoutes() {
       ) : null}
     </div>
   );
+}
+
+function thisIsMarketPlugin(plugin: { capabilities?: string[]; config: { source?: string } }): boolean {
+  if (plugin.config?.source === 'market') return true;
+  return Array.isArray(plugin.capabilities) && plugin.capabilities.includes('market-plugin');
 }

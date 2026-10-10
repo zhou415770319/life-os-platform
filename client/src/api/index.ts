@@ -17,3 +17,4 @@ export * as aiSettingsApi from './ai-settings';
 export * as pomodoroApi from './pomodoro';
 export * as timeBlackholeApi from './time-blackhole';
 export * as childTvApi from './child-tv';
+export * as marketApi from './market';
