@@ -149,20 +149,67 @@ export class MarketService implements OnModuleInit {
 
   // ===== 市场清单 =====
 
+  /**
+   * 通过 GitHub Contents API 实时读取 index.json（Accept: raw 返回原文）。
+   * 绕过 raw/jsdelivr 等 CDN 缓存——jsdelivr 对清单文件缓存可达 12 小时，
+   * 手动刷新（force=1）时必须走本通道才能拿到最新插件列表。
+   */
+  private async fetchIndexViaApi(): Promise<string | null> {
+    const url = `https://api.github.com/repos/${MARKET_OWNER}/${MARKET_REPO}/contents/plugins/index.json?ref=${MARKET_BRANCH}`;
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/vnd.github.raw',
+          'User-Agent': 'life-os-platform',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) return null;
+      return await res.text();
+    } catch {
+      return null;
+    }
+  }
+
   async fetchIndex(force = false): Promise<MarketIndex> {
     const now = Date.now();
     if (!force && this.indexCache.index && now - this.indexCache.ts < this.CACHE_TTL_MS) {
       return this.indexCache.index;
     }
     try {
-      const { text, ok, used } = await this.fetchFirst('plugins/index.json');
-      if (!ok) {
-        // 网络失败时降级返回缓存
-        if (this.indexCache.index) {
-          this.logger.warn(`Market index fetch failed (${text}), using cache`);
-          return this.indexCache.index;
+      let text = '';
+      let used = '';
+      if (force) {
+        // 强制刷新：优先 GitHub API（实时、无 CDN 缓存），失败回退镜像
+        const apiText = await this.fetchIndexViaApi();
+        if (apiText) {
+          text = apiText;
+          used = 'github api';
+        } else {
+          const via = await this.fetchFirst('plugins/index.json');
+          if (!via.ok) {
+            if (this.indexCache.index) {
+              this.logger.warn(`Market index force-refresh failed (${via.text}), using cache`);
+              return this.indexCache.index;
+            }
+            throw new BadRequestException(`插件市场拉取失败（${via.text}），请检查网络或仓库配置`);
+          }
+          text = via.text;
+          used = via.used;
         }
-        throw new BadRequestException(`插件市场拉取失败（${text}），请检查网络或仓库配置`);
+      } else {
+        const via = await this.fetchFirst('plugins/index.json');
+        if (!via.ok) {
+          // 网络失败时降级返回缓存
+          if (this.indexCache.index) {
+            this.logger.warn(`Market index fetch failed (${via.text}), using cache`);
+            return this.indexCache.index;
+          }
+          throw new BadRequestException(`插件市场拉取失败（${via.text}），请检查网络或仓库配置`);
+        }
+        text = via.text;
+        used = via.used;
       }
       this.logger.debug(`Market index fetched from ${used}`);
       const index = JSON.parse(text) as MarketIndex;
@@ -181,8 +228,8 @@ export class MarketService implements OnModuleInit {
     }
   }
 
-  async listMarketPlugins(): Promise<{ items: MarketPluginItem[]; total: number }> {
-    const index = await this.fetchIndex();
+  async listMarketPlugins(force = false): Promise<{ items: MarketPluginItem[]; total: number }> {
+    const index = await this.fetchIndex(force);
     const rows = await this.db.select().from(lifePluginConfig);
     const rowMap = new Map(rows.map((r) => [r.pluginKey, r]));
     const items: MarketPluginItem[] = index.plugins.map((def) => {

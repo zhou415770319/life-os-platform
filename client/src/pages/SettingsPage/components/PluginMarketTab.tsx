@@ -66,10 +66,10 @@ const PluginMarketTab: React.FC<PluginMarketTabProps> = ({
   const [marketBusyKey, setMarketBusyKey] = useState<string | null>(null);
   const [detailPlugin, setDetailPlugin] = useState<AvailablePlugin | null>(null);
 
-  const refreshMarket = useCallback(async () => {
+  const refreshMarket = useCallback(async (force = false) => {
     setLoadingMarket(true);
     try {
-      const data = await marketApi.getMarketPlugins();
+      const data = await marketApi.getMarketPlugins({ force });
       setMarketItems(data.items ?? []);
     } catch (err) {
       // 网络不可用时静默降级（内置插件区不受影响）
@@ -86,9 +86,9 @@ const PluginMarketTab: React.FC<PluginMarketTabProps> = ({
   const getInstalled = (pluginKey: string) =>
     installedPlugins.find((p) => p.pluginKey === pluginKey) ?? null;
 
-  /** 手动刷新：重新拉取在线市场清单 + 本地插件数据 */
+  /** 手动刷新：强制绕过缓存拉取最新市场清单 + 刷新本地插件数据 */
   const handleRefresh = async () => {
-    await Promise.all([refreshMarket(), onDataChanged?.()]);
+    await Promise.all([refreshMarket(true), onDataChanged?.()]);
     toast.success('插件市场已刷新');
   };
 

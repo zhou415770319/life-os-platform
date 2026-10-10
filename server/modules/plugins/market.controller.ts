@@ -1,16 +1,18 @@
-import { Controller, Get, Post, Param, Body, Res } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { MarketService } from './market.service';
-import type { PluginConfig } from '@shared/api.interface';
+import type { PluginConfig, MarketPluginItem } from '@shared/api.interface';
 
 @Controller('api/market')
 export class MarketController {
   constructor(private readonly marketService: MarketService) {}
 
-  /** 在线市场插件列表（含已安装状态） */
+  /** 在线市场插件列表（含已安装状态）；?force=1 强制绕过 10 分钟缓存，拉取最新市场清单 */
   @Get()
-  list() {
-    return this.marketService.listMarketPlugins();
+  list(
+    @Query('force') force?: string,
+  ): Promise<{ items: MarketPluginItem[]; total: number }> {
+    return this.marketService.listMarketPlugins(force === '1' || force === 'true');
   }
 
   /** 安装市场插件 */

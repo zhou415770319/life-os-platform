@@ -4,8 +4,13 @@ import type {
   MarketPluginItem,
 } from '@shared/api.interface';
 
-export async function getMarketPlugins(): Promise<{ items: MarketPluginItem[]; total: number }> {
-  const response = await axiosForBackend({ url: '/api/market', method: 'GET' });
+export async function getMarketPlugins(options?: {
+  force?: boolean;
+}): Promise<{ items: MarketPluginItem[]; total: number }> {
+  const response = await axiosForBackend({
+    url: options?.force ? '/api/market?force=1' : '/api/market',
+    method: 'GET',
+  });
   return response.data;
 }
 
