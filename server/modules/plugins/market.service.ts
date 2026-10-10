@@ -473,6 +473,7 @@ export class MarketService implements OnModuleInit {
           cardIcon: manifest.cardIcon || 'puzzle',
           gradientFrom: manifest.gradientFrom,
           gradientTo: manifest.gradientTo,
+          entry: manifest.entry,
           files,
           aiMethods: manifest.aiMethods,
         },
