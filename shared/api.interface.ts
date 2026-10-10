@@ -761,7 +761,7 @@ export interface ChildTvRuntimeStatus {
   manual: boolean;
   nextSchedule: ChildTvNextSchedule | null;
   locked: boolean;
-  lockReason: 'playback' | 'manual' | null;
+  lockReason: 'playback' | 'manual' | 'remote' | null;
   lockEndsAt: string | null;
   /** mpv 进程状态 */
   mpv: 'running' | 'stopped' | 'missing';
@@ -809,7 +809,55 @@ export interface ChildTvStatsEntry {
 export interface ChildTvAuthInfo {
   loggedIn: boolean;
   username: string;
+  role: 'parent' | 'child' | null;
+  displayName: string;
   pinEnabled: boolean;
+}
+
+/** 儿童端账号（多账号体系：parent + child，child 由家长创建并绑定） */
+export interface ChildTvAccountInfo {
+  username: string;
+  role: 'parent' | 'child';
+  displayName: string;
+  /** child 账号归属的家长用户名 */
+  boundTo: string | null;
+  /** 家长端生成的绑定码（儿童端受控模式凭此连接） */
+  bindCode: string | null;
+  /** 账号级锁定状态 */
+  locked: boolean;
+  lockReason: 'playback' | 'manual' | 'remote' | null;
+  lockEndsAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 家长端下发/儿童端拉取的同步状态（双机受控模式） */
+export interface ChildTvSyncState {
+  /** 状态版本号：儿童端据此判断是否有变化 */
+  version: number;
+  /** 本账号是否被家长锁定 */
+  locked: boolean;
+  lockReason: 'playback' | 'manual' | 'remote' | null;
+  lockEndsAt: string | null;
+  /** 家长端当前应播放的时段（null = 停止） */
+  playingScheduleId: string | null;
+  playingTitle: string;
+  playingEndsAt: string | null;
+  /** 完整时段表（儿童端本机解析资源用） */
+  schedules: ChildTvSchedule[];
+  /** 家长端当前时间 ISO（两端对时） */
+  serverTime: string;
+}
+
+/** 家长端 SSE 广播事件载荷 */
+export interface ChildTvSyncEvent {
+  type: 'lock' | 'unlock' | 'play' | 'stop' | 'schedule-change' | 'ping';
+  account: string;
+  scheduleId?: string | null;
+  title?: string;
+  endsAt?: string | null;
+  reason?: 'playback' | 'manual' | 'remote' | null;
+  minutes?: number;
 }
 
 export interface ChildTvSettings {
@@ -821,5 +869,15 @@ export interface ChildTvSettings {
   immediatePlayDurationMinutes: number;
   /** 自定义 mpv 可执行文件路径（留空自动检测） */
   mpvPath: string;
+  /** 受控模式（儿童端）：连接家长端、接收锁定/播放指令 */
+  controlled: {
+    enabled: boolean;
+    /** 家长端地址，如 http://192.168.1.10:3003 */
+    parentUrl: string;
+    /** 本机儿童账号（家长端创建的账号名） */
+    childUsername: string;
+    /** 家长端生成的绑定码 */
+    bindCode: string;
+  };
 }
 

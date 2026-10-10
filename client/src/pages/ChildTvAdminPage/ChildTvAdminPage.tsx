@@ -22,9 +22,14 @@ import {
   BarChart3,
   Video,
   Music,
+  Users,
+  Copy,
+  Link2,
+  KeyRound,
 } from 'lucide-react';
 import { childTvApi } from '@client/src/api';
 import type {
+  ChildTvAccountInfo,
   ChildTvBrowseResult,
   ChildTvSchedule,
   ChildTvScheduleInput,
@@ -207,7 +212,7 @@ export default function ChildTvAdminPage() {
   const [browseOpen, setBrowseOpen] = useState(false);
   const [browseMode, setBrowseMode] = useState<'folder' | 'file'>('folder');
   const [lockMinutes, setLockMinutes] = useState(240);
-  const [activeTab, setActiveTab] = useState<'console' | 'schedules' | 'records' | 'settings'>('console');
+  const [activeTab, setActiveTab] = useState<'console' | 'accounts' | 'schedules' | 'records' | 'settings'>('console');
   const [formOpen, setFormOpen] = useState(false);
 
   const refresh = useCallback(() => {
@@ -219,6 +224,84 @@ export default function ChildTvAdminPage() {
     queryFn: childTvApi.childTvMe,
     enabled: !!token,
   });
+
+  // ===== 儿童账号管理 =====
+  const [childForm, setChildForm] = useState({ username: '', password: '', displayName: '' });
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['child-tv-accounts', token],
+    queryFn: childTvApi.childTvListAccounts,
+    enabled: !!token && auth?.role === 'parent',
+    refetchInterval: 10_000,
+  });
+
+  const createChildMutation = useMutation({
+    mutationFn: () =>
+      childTvApi.childTvCreateAccount({
+        username: childForm.username.trim(),
+        password: childForm.password,
+        displayName: childForm.displayName.trim() || undefined,
+      }),
+    onSuccess: () => {
+      toast.success('儿童账号已创建');
+      setChildForm({ username: '', password: '', displayName: '' });
+      queryClient.invalidateQueries({ queryKey: ['child-tv-accounts'] });
+    },
+    onError: (e) => {
+      const msg =
+        (e as { response?: { data?: { message?: string } } }).response?.data?.message ?? '创建失败';
+      toast.error(typeof msg === 'string' ? msg : '创建失败');
+    },
+  });
+
+  const bindMutation = useMutation({
+    mutationFn: (username: string) => childTvApi.childTvBindAccount(username),
+    onSuccess: (info) => {
+      toast.success(`已生成绑定码：${info.bindCode}`);
+      queryClient.invalidateQueries({ queryKey: ['child-tv-accounts'] });
+    },
+    onError: (e) => {
+      const msg =
+        (e as { response?: { data?: { message?: string } } }).response?.data?.message ?? '生成失败';
+      toast.error(typeof msg === 'string' ? msg : '生成失败');
+    },
+  });
+
+  const lockChildMutation = useMutation({
+    mutationFn: ({ username, minutes }: { username: string; minutes: number }) =>
+      childTvApi.childTvLock(username, minutes),
+    onSuccess: () => {
+      toast.success('已锁定该儿童账号的电脑');
+      queryClient.invalidateQueries({ queryKey: ['child-tv-accounts'] });
+      refresh();
+    },
+    onError: (e) => {
+      const msg =
+        (e as { response?: { data?: { message?: string } } }).response?.data?.message ?? '锁定失败';
+      toast.error(typeof msg === 'string' ? msg : '锁定失败');
+    },
+  });
+
+  const unlockChildMutation = useMutation({
+    mutationFn: (username: string) => childTvApi.childTvUnlock(username),
+    onSuccess: () => {
+      toast.success('已解锁该儿童账号');
+      queryClient.invalidateQueries({ queryKey: ['child-tv-accounts'] });
+      refresh();
+    },
+  });
+
+  const deleteChildMutation = useMutation({
+    mutationFn: (username: string) => childTvApi.childTvDeleteAccount(username),
+    onSuccess: () => {
+      toast.success('儿童账号已删除');
+      queryClient.invalidateQueries({ queryKey: ['child-tv-accounts'] });
+    },
+  });
+
+  const copyBindCode = (code: string | null) => {
+    if (!code) return;
+    void navigator.clipboard?.writeText(code).then(() => toast.success(`绑定码已复制：${code}`));
+  };
 
   const { data: status } = useQuery({
     queryKey: ['child-tv-status', token],
@@ -368,7 +451,7 @@ export default function ChildTvAdminPage() {
   });
 
   const lockMutation = useMutation({
-    mutationFn: (minutes: number) => childTvApi.childTvLock(minutes),
+    mutationFn: (minutes: number) => childTvApi.childTvLock(undefined, minutes),
     onSuccess: () => {
       toast.success('已锁定电脑（键鼠失效）');
       refresh();
@@ -468,8 +551,35 @@ export default function ChildTvAdminPage() {
               <Button className="w-full" onClick={() => loginMutation.mutate()} disabled={loginMutation.isPending}>
                 {loginMutation.isPending ? '登录中...' : '登录'}
               </Button>
-              <p className="text-center text-xs text-zinc-500">默认账号 admin / 123456</p>
+              <p className="text-center text-xs text-zinc-500">默认家长账号 admin / 123456</p>
             </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // 儿童账号不允许进入控制台（只能看）
+  if (auth && auth.role === 'child') {
+    return (
+      <div className="p-6 md:p-10 min-h-screen relative overflow-hidden">
+        <BackgroundGlow variant="page" />
+        <div className="mx-auto max-w-md pt-16">
+          <Card className="p-8 text-center">
+            <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-rose-400" />
+            <h2 className="text-lg font-semibold text-zinc-50">这是家长控制台</h2>
+            <p className="mt-2 text-sm text-zinc-400">
+              当前登录的是儿童账号「{auth.username}」，不能进行控制操作。
+              <br />
+              儿童请在观看页使用。
+            </p>
+            <Button
+              variant="outline"
+              className="mt-5"
+              onClick={handleLogout}
+            >
+              <LogOut className="mr-1 h-3.5 w-3.5" /> 退出并重新登录
+            </Button>
           </Card>
         </div>
       </div>
@@ -524,6 +634,7 @@ export default function ChildTvAdminPage() {
         {(
           [
             ['console', '控制台', MonitorPlay],
+            ['accounts', '儿童账号', Users],
             ['schedules', '时段管理', Tv],
             ['records', '日志与统计', BarChart3],
             ['settings', '设置', SettingsIcon],
@@ -797,6 +908,148 @@ export default function ChildTvAdminPage() {
           </div>
         </Card>
       </div>
+      )}
+
+      {/* 儿童账号：创建 + 绑定 + 远程锁定 */}
+      {activeTab === 'accounts' && (
+        <div className="mb-6 grid gap-6 lg:grid-cols-2">
+          <Card className="p-6">
+            <h3 className="mb-4 flex items-center gap-2 text-sm font-medium text-zinc-300">
+              <Plus className="h-4 w-4 text-emerald-400" /> 创建儿童账号
+            </h3>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">用户名</label>
+                <input
+                  value={childForm.username}
+                  onChange={(e) => setChildForm({ ...childForm, username: e.target.value })}
+                  placeholder="如：kid1"
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">密码</label>
+                <input
+                  type="password"
+                  value={childForm.password}
+                  onChange={(e) => setChildForm({ ...childForm, password: e.target.value })}
+                  placeholder="登录观看页用的密码"
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-zinc-400">昵称（可选）</label>
+                <input
+                  value={childForm.displayName}
+                  onChange={(e) => setChildForm({ ...childForm, displayName: e.target.value })}
+                  placeholder="如：小明的儿童机"
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                />
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => createChildMutation.mutate()}
+                disabled={!childForm.username.trim() || !childForm.password || createChildMutation.isPending}
+              >
+                {createChildMutation.isPending ? '创建中...' : '创建儿童账号'}
+              </Button>
+              <p className="text-[11px] leading-relaxed text-zinc-500">
+                儿童账号用于儿童电脑登录观看页。创建后为儿童生成绑定码，儿童端填写绑定码即可被本控制台远程锁定 / 解锁。
+              </p>
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="mb-4 flex items-center gap-2 text-sm font-medium text-zinc-300">
+              <Users className="h-4 w-4 text-indigo-400" /> 账号列表
+            </h3>
+            {accounts.length === 0 && (
+              <div className="py-8 text-center text-sm text-zinc-500">还没有儿童账号</div>
+            )}
+            <div className="max-h-[26rem] space-y-3 overflow-y-auto pr-1">
+              {accounts.map((acc) => (
+                <div
+                  key={acc.username}
+                  className="rounded-xl border border-white/10 bg-white/[0.02] p-4"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-zinc-100">{acc.displayName || acc.username}</span>
+                    <Badge className={acc.role === 'parent' ? 'bg-indigo-500/20 text-indigo-300' : 'bg-emerald-500/20 text-emerald-300'}>
+                      {acc.role === 'parent' ? '家长' : '儿童'}
+                    </Badge>
+                    {acc.locked ? (
+                      <Badge className="bg-rose-500/20 text-rose-300">已锁定</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-zinc-400">未锁定</Badge>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                    <span className="font-mono">{acc.username}</span>
+                    {acc.boundTo ? (
+                      <span className="flex items-center gap-1 text-emerald-400">
+                        <Link2 className="h-3 w-3" /> 已绑定（绑定码：{acc.bindCode ?? '-'}）
+                      </span>
+                    ) : acc.role === 'child' ? (
+                      <span className="text-zinc-500">未绑定</span>
+                    ) : null}
+                  </div>
+                  {acc.role === 'child' && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => bindMutation.mutate(acc.username)}
+                        disabled={bindMutation.isPending || !!acc.bindCode}
+                      >
+                        <KeyRound className="mr-1 h-3 w-3" />
+                        {acc.bindCode ? '绑定码已生成' : '生成绑定码'}
+                      </Button>
+                      {acc.bindCode && (
+                        <Button variant="ghost" size="sm" onClick={() => copyBindCode(acc.bindCode)}>
+                          <Copy className="mr-1 h-3 w-3" /> 复制绑定码
+                        </Button>
+                      )}
+                      {acc.locked ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="border-emerald-400/20 text-emerald-300"
+                          onClick={() => unlockChildMutation.mutate(acc.username)}
+                          disabled={unlockChildMutation.isPending}
+                        >
+                          <LockOpen className="mr-1 h-3 w-3" /> 解锁
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-rose-400/30 text-rose-300"
+                          onClick={() => lockChildMutation.mutate({ username: acc.username, minutes: lockMinutes })}
+                          disabled={lockChildMutation.isPending}
+                        >
+                          <Lock className="mr-1 h-3 w-3" /> 锁定（{lockMinutes}分钟）
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-rose-400"
+                        onClick={() => {
+                          if (window.confirm(`确定删除儿童账号「${acc.username}」吗？`)) {
+                            deleteChildMutation.mutate(acc.username);
+                          }
+                        }}
+                        disabled={deleteChildMutation.isPending}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
       )}
 
       {/* 设置 */}

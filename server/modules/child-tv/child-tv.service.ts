@@ -12,8 +12,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { exec, spawn, ChildProcess } from 'child_process';
+import { Observable, Subject } from 'rxjs';
 import { JsonStore } from '@server/storage/json-store';
 import type {
+  ChildTvAccountInfo,
   ChildTvAuthInfo,
   ChildTvBrowseResult,
   ChildTvLogEntry,
@@ -23,6 +25,8 @@ import type {
   ChildTvScheduleInput,
   ChildTvSettings,
   ChildTvStatsEntry,
+  ChildTvSyncEvent,
+  ChildTvSyncState,
 } from '@shared/api.interface';
 
 /** 媒体扩展名分类 */
@@ -30,13 +34,34 @@ const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.we
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.opus', '.wma']);
 const MEDIA_EXTS = new Set([...VIDEO_EXTS, ...AUDIO_EXTS]);
 
-interface AuthFile {
+/** 账号（多账号体系：parent + child） */
+interface ChildTvAccount {
   username: string;
   salt: string;
   /** sha256(salt + password) */
   passwordHash: string;
+  role: 'parent' | 'child';
+  /** 显示名（儿童昵称） */
+  displayName: string;
   /** 观看页 PIN 哈希（sha256 加盐），null 表示未启用 */
   pinHash: string | null;
+  /** child 账号归属的家长用户名；parent 为 null */
+  boundTo: string | null;
+  /** 家长端生成的绑定码（儿童端受控模式凭此连接家长端） */
+  bindCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AuthFile {
+  accounts: ChildTvAccount[];
+  updatedAt: string;
+}
+
+/** 账号级锁定状态（家长端记录，下发给对应儿童端执行） */
+interface ChildLockState {
+  reason: 'playback' | 'manual' | 'remote';
+  endsAt: string | null;
   updatedAt: string;
 }
 
@@ -51,11 +76,19 @@ interface PlayerSession {
   stopReason: string | null;
 }
 
+/** 家长端 SSE 广播连接（account -> 推送通道） */
+interface SseConnection {
+  account: string;
+  subject: Subject<{ data: string }>;
+}
+
 const LOCK_RELEASE_FILE = '.child-tv-lock-release';
 const LOCK_HEARTBEAT_FILE = '.child-tv-lock-heartbeat';
 const LOCK_SCRIPT_FILE = '.child-tv-lock.ps1';
 const M3U_FILE = 'child-tv-playlist.m3u';
 const SECRET_FILE = 'child-tv-secret.txt';
+const LOCKS_FILE = 'child-tv-locks.json';
+const SYNC_INTERVAL_MS = 10_000;
 
 @Injectable()
 export class ChildTvService implements OnModuleInit, OnModuleDestroy {
@@ -69,17 +102,35 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
 
   private authFile = path.join(this.dataDir, 'child-tv-auth.json');
   private settingsFile = path.join(this.dataDir, 'child-tv-settings.json');
+  private locksFile = path.join(this.dataDir, LOCKS_FILE);
   private secret: string;
 
   private player: PlayerSession | null = null;
   private lockProc: ChildProcess | null = null;
-  private lockReason: 'playback' | 'manual' | null = null;
+  private lockReason: 'playback' | 'manual' | 'remote' | null = null;
   private lockEndsAt: string | null = null;
   private lockTimer: NodeJS.Timeout | null = null;
   private tickTimer: NodeJS.Timeout | null = null;
   private lastLog = '';
   private adminCached: boolean | null = null;
   private mpvPathCached: string | null | undefined;
+
+  /** 账号级锁定状态：username -> ChildLockState（家长端权威数据） */
+  private childLocks: Record<string, ChildLockState> = {};
+  /** 家长端当前下发给儿童端的播放指令（双机模式） */
+  private syncPlaying: { scheduleId: string | null; title: string; endsAt: string | null } = {
+    scheduleId: null,
+    title: '',
+    endsAt: null,
+  };
+  /** 同步状态版本号（儿童端据此判断变化） */
+  private syncVersion = 0;
+  /** 家长端 SSE 广播连接 */
+  private sseClients: SseConnection[] = [];
+  /** 儿童端受控模式轮询/重连定时器 */
+  private controlledTimer: NodeJS.Timeout | null = null;
+  /** 儿童端受控模式是否激活 */
+  private controlledActive = false;
 
   constructor() {
     fs.mkdirSync(this.dataDir, { recursive: true });
@@ -88,6 +139,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     this.ensureAuthFile();
     this.ensureSettingsFile();
     this.ensureSeedSchedules();
+    this.loadChildLocks();
   }
 
   /** 将旧版本存放在 user-data/ 根目录的本插件文件迁移到插件目录下（文件已存在则不覆盖） */
@@ -141,11 +193,22 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     // 服务启动：解除遗留锁定（进程重启即解锁）
     this.releaseLockFile();
     this.log('info', '儿童定时播放服务启动');
-    this.tickTimer = setInterval(() => void this.tick(), 15_000);
-    void this.tick();
+    const settings = this.readSettings();
+    if (settings.controlled?.enabled && settings.controlled.parentUrl) {
+      // 儿童端受控模式：连接家长端，接收锁定/播放指令；本机调度由家长端驱动
+      this.controlledActive = true;
+      void this.controlledSyncLoop();
+      this.log('info', `受控模式已启用，家长端：${settings.controlled.parentUrl}（账号 ${settings.controlled.childUsername}）`);
+    } else {
+      // 单机/家长端模式：本机调度引擎
+      this.tickTimer = setInterval(() => void this.tick(), 15_000);
+      void this.tick();
+    }
   }
 
   onModuleDestroy(): void {
+    this.controlledActive = false;
+    if (this.controlledTimer) clearInterval(this.controlledTimer);
     if (this.tickTimer) clearInterval(this.tickTimer);
     if (this.lockTimer) clearTimeout(this.lockTimer);
     this.stopPlayback('服务停止');
@@ -184,10 +247,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
 
   private readAuth(): AuthFile {
     return this.readJson<AuthFile>(this.authFile, {
-      username: 'admin',
-      salt: '',
-      passwordHash: '',
-      pinHash: null,
+      accounts: [],
       updatedAt: new Date().toISOString(),
     });
   }
@@ -197,16 +257,59 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   }
 
   private ensureAuthFile(): void {
-    if (fs.existsSync(this.authFile)) return;
-    const salt = crypto.randomBytes(16).toString('hex');
-    this.writeAuth({
-      username: 'admin',
-      salt,
-      passwordHash: this.hash(salt, '123456'),
-      pinHash: null,
-      updatedAt: new Date().toISOString(),
-    });
-    this.log('info', '已创建默认账号 admin（密码 123456，sha256 加盐存储）');
+    if (!fs.existsSync(this.authFile)) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const now = new Date().toISOString();
+      this.writeAuth({
+        accounts: [
+          {
+            username: 'admin',
+            salt,
+            passwordHash: this.hash(salt, '123456'),
+            role: 'parent',
+            displayName: '管理员',
+            pinHash: null,
+            boundTo: null,
+            bindCode: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        updatedAt: now,
+      });
+      this.log('info', '已创建默认家长账号 admin（密码 123456，sha256 加盐存储）');
+      return;
+    }
+    // 旧版单账号格式迁移为多账号
+    const raw = this.readJson<Record<string, unknown> & { accounts?: unknown }>(this.authFile, {});
+    if (!Array.isArray(raw.accounts)) {
+      const legacy = raw as unknown as {
+        username?: string;
+        salt?: string;
+        passwordHash?: string;
+        pinHash?: string | null;
+        updatedAt?: string;
+      };
+      const now = new Date().toISOString();
+      this.writeAuth({
+        accounts: [
+          {
+            username: legacy.username ?? 'admin',
+            salt: legacy.salt ?? crypto.randomBytes(16).toString('hex'),
+            passwordHash: legacy.passwordHash ?? this.hash(legacy.salt ?? '', '123456'),
+            role: 'parent',
+            displayName: legacy.username ?? 'admin',
+            pinHash: legacy.pinHash ?? null,
+            boundTo: null,
+            bindCode: null,
+            createdAt: legacy.updatedAt ?? now,
+            updatedAt: now,
+          },
+        ],
+        updatedAt: now,
+      });
+      this.log('info', `已迁移旧版单账号 → 多账号体系（${legacy.username ?? 'admin'} 为家长账号）`);
+    }
   }
 
   private ensureSettingsFile(): void {
@@ -221,11 +324,24 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       defaultLockMinutes: 240,
       immediatePlayDurationMinutes: 120,
       mpvPath: '',
+      controlled: {
+        enabled: false,
+        parentUrl: '',
+        childUsername: '',
+        bindCode: '',
+      },
     };
   }
 
   readSettings(): ChildTvSettings {
-    return { ...this.defaultSettings(), ...this.readJson<Partial<ChildTvSettings>>(this.settingsFile, {}) };
+    return {
+      ...this.defaultSettings(),
+      ...this.readJson<Partial<ChildTvSettings>>(this.settingsFile, {}),
+      controlled: {
+        ...this.defaultSettings().controlled,
+        ...(this.readJson<Partial<ChildTvSettings>>(this.settingsFile, {}).controlled ?? {}),
+      },
+    };
   }
 
   private writeSettings(s: ChildTvSettings): void {
@@ -304,14 +420,32 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     return this.statsStore.findAll().slice(-100).reverse();
   }
 
-  // ==================== 鉴权 ====================
+  // ==================== 鉴权（多账号：parent / child） ====================
 
-  private issueToken(username: string): string {
+  private findAccount(username: string): ChildTvAccount | null {
+    const auth = this.readAuth();
+    return auth.accounts.find((a) => a.username === username) ?? null;
+  }
+
+  private issueToken(account: ChildTvAccount): string {
     const payload = Buffer.from(
-      JSON.stringify({ u: username, exp: Date.now() + 7 * 24 * 3600_000 }),
+      JSON.stringify({ u: account.username, r: account.role, exp: Date.now() + 7 * 24 * 3600_000 }),
     ).toString('base64url');
     const sig = crypto.createHmac('sha256', this.secret).update(payload).digest('base64url');
     return `${payload}.${sig}`;
+  }
+
+  private parseToken(token: string): { u: string; r?: string; exp?: number } | null {
+    try {
+      const data = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf-8')) as {
+        u: string;
+        r?: string;
+        exp?: number;
+      };
+      return data;
+    } catch {
+      return null;
+    }
   }
 
   private verifyToken(token: string | null | undefined): boolean {
@@ -341,54 +475,229 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
-  requireAuth(req: { headers?: Record<string, string | string[] | undefined> }): void {
-    if (!this.verifyToken(this.extractToken(req))) {
-      throw new UnauthorizedException('请先登录家长控制台');
-    }
+  /** 返回当前登录账号（未登录返回 null） */
+  private currentAccount(req: { headers?: Record<string, string | string[] | undefined> }): ChildTvAccount | null {
+    const token = this.extractToken(req);
+    if (!this.verifyToken(token)) return null;
+    const data = this.parseToken(token);
+    if (!data?.u) return null;
+    return this.findAccount(data.u);
   }
 
-  async login(username: string, password: string): Promise<{ token: string; username: string }> {
-    const auth = this.readAuth();
-    const ok =
-      username === auth.username &&
-      this.hash(auth.salt, password ?? '') === auth.passwordHash;
-    if (!ok) throw new UnauthorizedException('用户名或密码错误');
-    return { token: this.issueToken(username), username };
+  /** 校验登录；未登录抛 401 */
+  requireAuth(req: { headers?: Record<string, string | string[] | undefined> }): ChildTvAccount {
+    const acc = this.currentAccount(req);
+    if (!acc) throw new UnauthorizedException('请先登录控制台');
+    return acc;
+  }
+
+  /** 校验家长角色；非家长账号抛 401（儿童账号只能看，不能控制） */
+  requireParent(req: { headers?: Record<string, string | string[] | undefined> }): ChildTvAccount {
+    const acc = this.requireAuth(req);
+    if (acc.role !== 'parent') throw new UnauthorizedException('该操作需要家长账号');
+    return acc;
+  }
+
+  async login(username: string, password: string): Promise<{
+    token: string;
+    username: string;
+    role: 'parent' | 'child';
+    displayName: string;
+  }> {
+    const account = this.findAccount(username);
+    if (!account || this.hash(account.salt, password ?? '') !== account.passwordHash) {
+      throw new UnauthorizedException('用户名或密码错误');
+    }
+    return {
+      token: this.issueToken(account),
+      username: account.username,
+      role: account.role,
+      displayName: account.displayName,
+    };
   }
 
   authInfo(req: { headers?: Record<string, string | string[] | undefined> }): ChildTvAuthInfo {
-    const loggedIn = this.verifyToken(this.extractToken(req));
-    const auth = this.readAuth();
+    const acc = this.currentAccount(req);
+    if (!acc) {
+      return { loggedIn: false, username: '', role: null, displayName: '', pinEnabled: false };
+    }
     return {
-      loggedIn,
-      username: loggedIn ? auth.username : '',
-      pinEnabled: !!auth.pinHash,
+      loggedIn: true,
+      username: acc.username,
+      role: acc.role,
+      displayName: acc.displayName,
+      pinEnabled: !!acc.pinHash,
     };
   }
 
   /** 校验观看页 PIN（未启用时直接通过） */
   checkPin(pin: string): { ok: boolean } {
-    const auth = this.readAuth();
-    if (!auth.pinHash) return { ok: true };
-    return { ok: this.hash(auth.salt, pin ?? '') === auth.pinHash };
+    const acc = this.currentAccountForPin();
+    if (!acc || !acc.pinHash) return { ok: true };
+    return { ok: this.hash(acc.salt, pin ?? '') === acc.pinHash };
   }
 
-  async updateAccount(dto: {
-    password?: string;
-    pin?: string | null;
-  }): Promise<{ username: string; pinEnabled: boolean }> {
+  private currentAccountForPin(): ChildTvAccount | null {
+    // PIN 校验针对"默认家长账号"（兼容旧版单账号语义）；多账号下观看页可另行校验
     const auth = this.readAuth();
+    return auth.accounts.find((a) => a.role === 'parent') ?? auth.accounts[0] ?? null;
+  }
+
+  async updateAccount(
+    req: { headers?: Record<string, string | string[] | undefined> },
+    dto: { password?: string; pin?: string | null },
+  ): Promise<{ username: string; pinEnabled: boolean }> {
+    const acc = this.requireAuth(req);
+    const auth = this.readAuth();
+    const idx = auth.accounts.findIndex((a) => a.username === acc.username);
+    if (idx < 0) throw new NotFoundException('账号不存在');
     if (dto.password !== undefined && dto.password !== '') {
-      auth.passwordHash = this.hash(auth.salt, dto.password);
-      auth.updatedAt = new Date().toISOString();
+      auth.accounts[idx].passwordHash = this.hash(auth.accounts[idx].salt, dto.password);
+      auth.accounts[idx].updatedAt = new Date().toISOString();
     }
     if (dto.pin !== undefined) {
-      if (dto.pin === null || dto.pin === '') auth.pinHash = null;
-      else auth.pinHash = this.hash(auth.salt, dto.pin);
-      auth.updatedAt = new Date().toISOString();
+      if (dto.pin === null || dto.pin === '') auth.accounts[idx].pinHash = null;
+      else auth.accounts[idx].pinHash = this.hash(auth.accounts[idx].salt, dto.pin);
+      auth.accounts[idx].updatedAt = new Date().toISOString();
     }
     this.writeAuth(auth);
-    return { username: auth.username, pinEnabled: !!auth.pinHash };
+    return { username: acc.username, pinEnabled: !!auth.accounts[idx].pinHash };
+  }
+
+  // ==================== 账号管理（家长） ====================
+
+  /** 家长创建儿童账号 */
+  createChildAccount(dto: {
+    username: string;
+    password: string;
+    displayName?: string;
+  }): ChildTvAccountInfo {
+    const name = (dto?.username ?? '').trim();
+    if (!name) throw new BadRequestException('账号名不能为空');
+    if (!/^[a-zA-Z0-9_\u4e00-\u9fa5]{2,20}$/.test(name)) {
+      throw new BadRequestException('账号名需 2-20 位字母/数字/下划线/中文');
+    }
+    if (!dto?.password) throw new BadRequestException('密码不能为空');
+    const auth = this.readAuth();
+    if (auth.accounts.some((a) => a.username === name)) {
+      throw new BadRequestException(`账号「${name}」已存在`);
+    }
+    const salt = crypto.randomBytes(16).toString('hex');
+    const now = new Date().toISOString();
+    const account: ChildTvAccount = {
+      username: name,
+      salt,
+      passwordHash: this.hash(salt, dto.password),
+      role: 'child',
+      displayName: dto.displayName?.trim() || name,
+      pinHash: null,
+      boundTo: null,
+      bindCode: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    auth.accounts.push(account);
+    this.writeAuth(auth);
+    this.log('info', `家长创建儿童账号「${name}」`);
+    return this.toAccountInfo(account);
+  }
+
+  /** 家长为儿童账号生成/刷新绑定码（儿童端受控模式凭此连接） */
+  generateBindCode(username: string): ChildTvAccountInfo {
+    const auth = this.readAuth();
+    const acc = auth.accounts.find((a) => a.username === username);
+    if (!acc) throw new NotFoundException('账号不存在');
+    if (acc.role !== 'child') throw new BadRequestException('只有儿童账号可生成绑定码');
+    acc.bindCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    acc.updatedAt = new Date().toISOString();
+    this.writeAuth(auth);
+    this.log('info', `已为儿童账号「${username}」生成绑定码`);
+    return this.toAccountInfo(acc);
+  }
+
+  /** 家长删除儿童账号（保留播放统计等数据） */
+  deleteChildAccount(username: string): { success: boolean } {
+    const auth = this.readAuth();
+    const acc = auth.accounts.find((a) => a.username === username);
+    if (!acc) throw new NotFoundException('账号不存在');
+    if (acc.role !== 'child') throw new BadRequestException('只能删除儿童账号');
+    auth.accounts = auth.accounts.filter((a) => a.username !== username);
+    this.writeAuth(auth);
+    delete this.childLocks[username];
+    this.saveChildLocks();
+    this.log('info', `家长删除儿童账号「${username}」`);
+    return { success: true };
+  }
+
+  /** 家长列出全部账号（含锁定状态） */
+  listAccounts(): ChildTvAccountInfo[] {
+    const auth = this.readAuth();
+    return auth.accounts.map((a) => this.toAccountInfo(a));
+  }
+
+  private toAccountInfo(a: ChildTvAccount): ChildTvAccountInfo {
+    const lock = this.childLocks[a.username];
+    return {
+      username: a.username,
+      role: a.role,
+      displayName: a.displayName,
+      boundTo: a.boundTo,
+      bindCode: a.bindCode,
+      locked: !!lock,
+      lockReason: lock?.reason ?? null,
+      lockEndsAt: lock?.endsAt ?? null,
+      createdAt: a.createdAt,
+      updatedAt: a.updatedAt,
+    };
+  }
+
+  // ==================== 账号级锁定（家长端权威状态） ====================
+
+  private loadChildLocks(): void {
+    this.childLocks = this.readJson<Record<string, ChildLockState>>(this.locksFile, {});
+  }
+
+  private saveChildLocks(): void {
+    this.writeJson(this.locksFile, this.childLocks);
+  }
+
+  private bumpSync(): void {
+    this.syncVersion += 1;
+  }
+
+  /** 锁定指定儿童账号：记录状态 + 广播给儿童端；儿童端收到后本机锁键 */
+  lockChildAccount(username: string, minutes: number): ChildTvAccountInfo {
+    const acc = this.findAccount(username);
+    if (!acc) throw new NotFoundException('账号不存在');
+    if (acc.role !== 'child') throw new BadRequestException('只能锁定儿童账号');
+    const m = Math.min(Math.max(Number(minutes) || this.readSettings().defaultLockMinutes, 1), 1440);
+    this.childLocks[username] = {
+      reason: 'manual',
+      endsAt: new Date(Date.now() + m * 60_000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.saveChildLocks();
+    this.bumpSync();
+    this.broadcast({ type: 'lock', account: username, reason: 'manual', minutes: m });
+    this.log('info', `家长锁定儿童账号「${username}」（最长 ${m} 分钟）`);
+    return this.toAccountInfo(acc);
+  }
+
+  /** 解锁指定儿童账号 */
+  unlockChildAccount(username: string): ChildTvAccountInfo {
+    const acc = this.findAccount(username);
+    if (!acc) throw new NotFoundException('账号不存在');
+    delete this.childLocks[username];
+    this.saveChildLocks();
+    this.bumpSync();
+    this.broadcast({ type: 'unlock', account: username });
+    this.log('info', `家长解锁儿童账号「${username}」`);
+    return this.toAccountInfo(acc);
+  }
+
+  /** 当前是否处于双机模式：存在已连接的儿童端 */
+  private hasControlledClients(): boolean {
+    return this.sseClients.length > 0;
   }
 
   async updateSettings(patch: Partial<ChildTvSettings>): Promise<ChildTvSettings> {
@@ -397,9 +706,27 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       ...cur,
       ...patch,
       pinHash: cur.pinHash, // PIN 由 updateAccount 管理
+      controlled: {
+        ...cur.controlled,
+        ...(patch.controlled ?? {}),
+      },
     };
     this.writeSettings(next);
     this.mpvPathCached = undefined; // mpv 路径可能已变更，强制下次重检
+    // 受控模式启停：切换时重启同步器
+    const wasActive = this.controlledActive;
+    const shouldActive = !!(next.controlled?.enabled && next.controlled.parentUrl);
+    if (shouldActive !== wasActive) {
+      this.controlledActive = shouldActive;
+      if (shouldActive) {
+        this.log('info', `受控模式已启用，家长端：${next.controlled.parentUrl}（账号 ${next.controlled.childUsername}）`);
+        void this.controlledSyncLoop();
+      } else {
+        this.log('info', '受控模式已停用，恢复本机调度');
+        this.tickTimer = setInterval(() => void this.tick(), 15_000);
+        void this.tick();
+      }
+    }
     return next;
   }
 
@@ -690,6 +1017,14 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   }
 
   stopPlayback(reason: string): { success: boolean } {
+    // 双机模式：家长端本机不播放，只下发停止指令给儿童端
+    if (this.hasControlledClients() && this.syncPlaying.scheduleId) {
+      this.syncPlaying = { scheduleId: null, title: '', endsAt: null };
+      this.bumpSync();
+      this.broadcast({ type: 'stop', account: '*' });
+      this.log('info', `双机模式：下发停止指令给儿童端（${reason}）`);
+      return { success: true };
+    }
     if (this.player) {
       this.player.stopReason = reason;
       const pid = this.player.proc.pid;
@@ -708,8 +1043,19 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     return { success: true };
   }
 
-  /** 手动立即播放指定时段 */
+  /** 手动立即播放指定时段（双机模式下发儿童端执行） */
   async playNow(scheduleId: string): Promise<ChildTvRuntimeStatus> {
+    if (this.hasControlledClients()) {
+      const schedule = this.schedulesStore.findAll().find((s) => s.id === scheduleId);
+      if (!schedule) throw new NotFoundException('时段不存在');
+      const durationMs = this.readSettings().immediatePlayDurationMinutes * 60_000;
+      const endsAt = new Date(Date.now() + durationMs).toISOString();
+      this.syncPlaying = { scheduleId, title: schedule.name, endsAt };
+      this.bumpSync();
+      this.broadcast({ type: 'play', account: '*', scheduleId, title: schedule.name, endsAt });
+      this.log('info', `双机模式：下发播放指令「${schedule.name}」给儿童端`);
+      return this.getRuntimeStatus();
+    }
     return this.startPlayback(scheduleId, true);
   }
 
@@ -769,7 +1115,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  startLock(minutes: number, reason: 'playback' | 'manual'): ChildTvRuntimeStatus {
+  startLock(minutes: number, reason: 'playback' | 'manual' | 'remote'): ChildTvRuntimeStatus {
     const m = Math.min(Math.max(Number(minutes) || this.readSettings().defaultLockMinutes, 1), 1440);
     if (reason === 'playback' && this.lockReason === 'manual') {
       // 已有手动锁，自动锁不覆盖
@@ -786,7 +1132,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       // 兜底：脚本若异常退出，定时解锁
       this.unlock();
     }, m * 60_000 + 30_000);
-    this.log('info', `${reason === 'manual' ? '家长手动' : '随播放'}锁定电脑（最长 ${m} 分钟）`);
+    const label = reason === 'manual' ? '家长手动' : reason === 'remote' ? '家长远程' : '随播放';
+    this.log('info', `${label}锁定电脑（最长 ${m} 分钟）`);
     return this.getRuntimeStatus();
   }
 
@@ -818,19 +1165,21 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   getRuntimeStatus(): ChildTvRuntimeStatus {
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    const playing = !!this.player;
-    const remainingMinutes = this.player
-      ? Math.max(0, Math.ceil((Date.parse(this.player.endsAt) - Date.now()) / 60_000))
+    // 双机模式：播放状态反映"已下发儿童端"
+    const controlled = this.hasControlledClients();
+    const playing = controlled ? !!this.syncPlaying.scheduleId : !!this.player;
+    const remainingMinutes = playing
+      ? Math.max(0, Math.ceil((Date.parse(this.player?.endsAt ?? this.syncPlaying.endsAt ?? now.toISOString()) - Date.now()) / 60_000))
       : null;
     const next = this.nextSchedule(nowMin);
     const mpv = this.detectMpv();
     const locked = this.lockReason !== null || this.lockAlive();
     return {
       playing,
-      currentTitle: this.player?.title ?? '',
-      currentScheduleId: this.player?.scheduleId ?? null,
+      currentTitle: this.player?.title ?? this.syncPlaying.title ?? '',
+      currentScheduleId: this.player?.scheduleId ?? this.syncPlaying.scheduleId ?? null,
       startedAt: this.player?.startedAt ?? null,
-      endsAt: this.player?.endsAt ?? null,
+      endsAt: this.player?.endsAt ?? this.syncPlaying.endsAt ?? null,
       remainingMinutes,
       manual: this.player?.manual ?? false,
       nextSchedule: next
@@ -846,9 +1195,15 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       mpv: playing ? 'running' : mpv ? 'stopped' : 'missing',
       mpvAvailable: !!mpv,
       admin: this.isAdmin(),
-      pinEnabled: !!this.readAuth().pinHash,
+      pinEnabled: this.pinEnabledForDefault(),
       lastLog: this.lastLog,
     };
+  }
+
+  private pinEnabledForDefault(): boolean {
+    const auth = this.readAuth();
+    const parent = auth.accounts.find((a) => a.role === 'parent');
+    return !!(parent?.pinHash ?? auth.accounts[0]?.pinHash ?? null);
   }
 
   /** 观看页使用：不暴露控制信息 */
@@ -869,7 +1224,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       nextSchedule: s.nextSchedule,
       locked: s.locked,
       endsAt: s.endsAt,
-      pinEnabled: !!this.readAuth().pinHash,
+      pinEnabled: this.pinEnabledForDefault(),
     };
   }
 
@@ -882,6 +1237,27 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       const active = this.schedulesStore
         .findAll()
         .filter((s) => s.enabled && this.inWindow(s, nowMin));
+
+      // 双机模式：家长端只做决策并下发儿童端执行（本机不播放）
+      if (this.hasControlledClients()) {
+        if (active.length > 0 && this.syncPlaying.scheduleId !== active[0].id) {
+          const s = active[0];
+          const endsAt = new Date(Date.now() + s.durationMinutes * 60_000).toISOString();
+          this.syncPlaying = { scheduleId: s.id, title: s.name, endsAt };
+          this.bumpSync();
+          this.broadcast({ type: 'play', account: '*', scheduleId: s.id, title: s.name, endsAt });
+          this.log('info', `双机模式：到点下发播放「${s.name}」给儿童端`);
+          // 播放自动锁（儿童端播放即锁定）
+          this.broadcast({ type: 'lock', account: '*', reason: 'playback', minutes: this.readSettings().defaultLockMinutes });
+        } else if (active.length === 0 && this.syncPlaying.scheduleId) {
+          this.syncPlaying = { scheduleId: null, title: '', endsAt: null };
+          this.bumpSync();
+          this.broadcast({ type: 'stop', account: '*' });
+          this.broadcast({ type: 'unlock', account: '*' });
+          this.log('info', '双机模式：时段窗口结束，下发停止');
+        }
+        return;
+      }
 
       if (active.length > 0 && !this.player) {
         await this.startPlayback(active[0].id, false);
@@ -920,6 +1296,198 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     };
     this.statsStore.create(entry);
     this.log('info', `播放统计已记录：${title}（${reason}）`);
+  }
+
+  // ==================== 双机同步（家长端下发 / 儿童端受控执行） ====================
+
+  /** 校验同步凭证：儿童账号 + 家长端生成的绑定码 */
+  private verifySyncCredential(account: string, bind: string): boolean {
+    if (!account || !bind) return false;
+    const acc = this.findAccount(account);
+    return !!acc && acc.role === 'child' && acc.bindCode === bind;
+  }
+
+  /** 儿童端轮询同步状态（受控模式每 10 秒拉取，校验绑定码） */
+  getSyncState(account: string, bind: string): ChildTvSyncState {
+    if (!this.verifySyncCredential(account, bind)) {
+      throw new UnauthorizedException('同步凭证无效（账号或绑定码错误）');
+    }
+    const lock = this.childLocks[account];
+    return {
+      version: this.syncVersion,
+      locked: !!lock,
+      lockReason: lock?.reason ?? null,
+      lockEndsAt: lock?.endsAt ?? null,
+      playingScheduleId: this.syncPlaying.scheduleId,
+      playingTitle: this.syncPlaying.title,
+      playingEndsAt: this.syncPlaying.endsAt,
+      schedules: this.getSchedules(),
+      serverTime: new Date().toISOString(),
+    };
+  }
+
+  /** 家长端 SSE 长连接：儿童端建立后，状态变化实时推送（断线由儿童端重连 + 轮询兜底） */
+  streamSyncEvents(account: string, bind: string): Observable<{ data: string }> {
+    if (!this.verifySyncCredential(account, bind)) {
+      throw new UnauthorizedException('同步凭证无效（账号或绑定码错误）');
+    }
+    const subject = new Subject<{ data: string }>();
+    const conn: SseConnection = { account, subject };
+    this.sseClients.push(conn);
+    this.log('info', `儿童端「${account}」已连接同步通道`);
+    // 建立连接即推送初始状态（含时段表与锁定状态）
+    subject.next({ data: JSON.stringify({ type: 'init', ...this.getSyncState(account, bind) }) });
+    const ping = setInterval(() => subject.next({ data: JSON.stringify({ type: 'ping' }) }), 25_000);
+    return new Observable<{ data: string }>((observer) => {
+      const sub = subject.subscribe({
+        next: (v) => observer.next(v),
+        error: (e) => observer.error(e),
+        complete: () => observer.complete(),
+      });
+      return () => {
+        sub.unsubscribe();
+        clearInterval(ping);
+        this.sseClients = this.sseClients.filter((c) => c !== conn);
+        this.log('info', `儿童端「${account}」已断开同步连接`);
+      };
+    });
+  }
+
+  /** 向所有已连接儿童端广播事件（儿童端按账号过滤） */
+  private broadcast(evt: ChildTvSyncEvent): void {
+    for (const conn of [...this.sseClients]) {
+      try {
+        conn.subject.next({ data: JSON.stringify(evt) });
+      } catch {
+        /* 忽略失效连接 */
+      }
+    }
+  }
+
+  // -------- 儿童端受控模式（本机执行端） --------
+
+  /** 受控模式主循环：先轮询校准状态，再建立 SSE 长连接实时接收指令；断线自动重连 */
+  private async controlledSyncLoop(): Promise<void> {
+    while (this.controlledActive) {
+      const settings = this.readSettings();
+      const base = (settings.controlled?.parentUrl ?? '').replace(/\/+$/, '');
+      const q = `account=${encodeURIComponent(settings.controlled?.childUsername ?? '')}&bind=${encodeURIComponent(settings.controlled?.bindCode ?? '')}`;
+      try {
+        if (!base) {
+          this.log('warn', '受控模式未配置家长端地址');
+          await this.sleep(15_000);
+          continue;
+        }
+        // 先拉一次全量状态校准（覆盖 SSE 断线期间的变化）
+        await this.controlledPollOnce(base, q);
+        // 建立 SSE 长连接（60 秒超时保护，断线后外层循环重连）
+        await this.controlledSse(base, q);
+      } catch (e) {
+        this.log('warn', `受控同步中断：${e instanceof Error ? e.message : String(e)}，10 秒后重试`);
+      }
+      await this.sleep(SYNC_INTERVAL_MS);
+    }
+  }
+
+  /** 轮询校准：应用家长端全量状态 */
+  private async controlledPollOnce(base: string, q: string): Promise<void> {
+    const res = await fetch(`${base}/api/child-tv/sync/state?${q}`, {
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`同步接口 HTTP ${res.status}`);
+    const state = (await res.json()) as ChildTvSyncState;
+    this.applyRemoteState(state);
+  }
+
+  /** 将家长端状态应用到本机（儿童端执行器） */
+  private applyRemoteState(state: ChildTvSyncState): void {
+    // 锁定/解锁
+    if (state.locked && !this.lockReason) {
+      const remaining = state.lockEndsAt
+        ? Math.max(1, Math.ceil((Date.parse(state.lockEndsAt) - Date.now()) / 60_000))
+        : this.readSettings().defaultLockMinutes;
+      this.startLock(remaining, 'remote');
+    } else if (!state.locked && (this.lockReason === 'remote' || this.lockReason === 'playback')) {
+      this.unlock();
+    }
+    // 播放/停止（时段表以家长端为准，本机解析资源播放）
+    if (state.playingScheduleId && this.player?.scheduleId !== state.playingScheduleId) {
+      void this.startPlayback(state.playingScheduleId, false);
+    } else if (!state.playingScheduleId && this.player) {
+      this.stopPlayback('家长端停止');
+    }
+    // 时段表同步：家长端为准，儿童端无需手动配置
+    if (Array.isArray(state.schedules)) {
+      const local = this.schedulesStore.findAll();
+      for (const s of state.schedules) {
+        const existing = local.find((x) => x.id === s.id);
+        if (!existing) this.schedulesStore.create(s);
+        else if (JSON.stringify(existing) !== JSON.stringify(s)) this.schedulesStore.update(s.id, s);
+      }
+    }
+  }
+
+  /** SSE 长连接：流式读取家长端推送事件，实时执行 */
+  private async controlledSse(base: string, q: string): Promise<void> {
+    const res = await fetch(`${base}/api/child-tv/sync/stream?${q}`, {
+      headers: { Accept: 'text/event-stream' },
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!res.ok) throw new Error(`SSE HTTP ${res.status}`);
+    if (!res.body) throw new Error('SSE 无响应体');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (this.controlledActive) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        this.handleSseChunk(chunk);
+      }
+    }
+  }
+
+  /** 解析单个 SSE 事件并执行（儿童端过滤只属于自己的指令） */
+  private handleSseChunk(chunk: string): void {
+    const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'));
+    if (!dataLine) return;
+    try {
+      const evt = JSON.parse(dataLine.slice(5).trim()) as ChildTvSyncEvent;
+      if (evt.type === 'ping') return;
+      const my = this.readSettings().controlled?.childUsername ?? '';
+      if (evt.account !== my && evt.account !== '*') return;
+      this.log('info', `受控指令：${evt.type}${evt.account === '*' ? '（全体）' : ''}`);
+      switch (evt.type) {
+        case 'lock':
+          if (!this.lockReason) {
+            this.startLock(evt.minutes ?? this.readSettings().defaultLockMinutes, 'remote');
+          }
+          break;
+        case 'unlock':
+          if (this.lockReason === 'remote' || this.lockReason === 'playback') this.unlock();
+          break;
+        case 'play':
+          if (evt.scheduleId && this.player?.scheduleId !== evt.scheduleId) {
+            void this.startPlayback(evt.scheduleId, false);
+          }
+          break;
+        case 'stop':
+          this.stopPlayback('家长端停止');
+          break;
+        default:
+          break;
+      }
+    } catch {
+      /* 忽略无法解析的事件帧 */
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
   }
 
   // ==================== 目录浏览 ====================

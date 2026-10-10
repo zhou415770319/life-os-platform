@@ -8,10 +8,12 @@ import {
   Put,
   Query,
   Req,
+  Sse,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { ChildTvService } from './child-tv.service';
-import type {
+import type { Observable } from 'rxjs';
+import { ChildTvService } from './child-tv.service';import type {
+  ChildTvAccountInfo,
   ChildTvAuthInfo,
   ChildTvBrowseResult,
   ChildTvLogEntry,
@@ -20,13 +22,14 @@ import type {
   ChildTvScheduleInput,
   ChildTvSettings,
   ChildTvStatsEntry,
+  ChildTvSyncState,
 } from '@shared/api.interface';
 
 @Controller('api/child-tv')
 export class ChildTvController {
   constructor(private readonly childTvService: ChildTvService) {}
 
-  // ===== 鉴权 =====
+  // ===== 鉴权（家长/儿童多账号） =====
 
   @Post('login')
   login(@Body() dto: { username?: string; password?: string }) {
@@ -48,9 +51,53 @@ export class ChildTvController {
     @Req() req: Request,
     @Body() dto: { password?: string; pin?: string | null },
   ) {
-    this.childTvService.requireAuth(req);
-    return this.childTvService.updateAccount(dto ?? {});
+    return this.childTvService.updateAccount(req, dto ?? {});
   }
+
+  // ===== 账号管理（家长） =====
+
+  /** 家长创建儿童账号 */
+  @Post('accounts')
+  createAccount(
+    @Req() req: Request,
+    @Body() dto: { username?: string; password?: string; displayName?: string },
+  ): ChildTvAccountInfo {
+    this.childTvService.requireParent(req);
+    return this.childTvService.createChildAccount({
+      username: dto?.username ?? '',
+      password: dto?.password ?? '',
+      displayName: dto?.displayName,
+    });
+  }
+
+  /** 家长列出全部账号（含锁定状态） */
+  @Get('accounts')
+  listAccounts(@Req() req: Request): ChildTvAccountInfo[] {
+    this.childTvService.requireParent(req);
+    return this.childTvService.listAccounts();
+  }
+
+  /** 家长为儿童账号生成/刷新绑定码 */
+  @Post('accounts/:username/bind')
+  bindAccount(
+    @Req() req: Request,
+    @Param('username') username: string,
+  ): ChildTvAccountInfo {
+    this.childTvService.requireParent(req);
+    return this.childTvService.generateBindCode(username);
+  }
+
+  /** 家长删除儿童账号（保留播放统计等数据） */
+  @Delete('accounts/:username')
+  deleteAccount(
+    @Req() req: Request,
+    @Param('username') username: string,
+  ): { success: boolean } {
+    this.childTvService.requireParent(req);
+    return this.childTvService.deleteChildAccount(username);
+  }
+
+  // ===== 设置 =====
 
   @Get('settings')
   getSettings(@Req() req: Request): ChildTvSettings {
@@ -103,30 +150,45 @@ export class ChildTvController {
     return this.childTvService.deleteSchedule(id);
   }
 
-  // ===== 控制 =====
+  // ===== 控制（家长；双机模式下自动下发儿童端） =====
 
   @Post('play')
   playNow(@Req() req: Request, @Body() dto: { scheduleId: string }): Promise<ChildTvRuntimeStatus> {
-    this.childTvService.requireAuth(req);
+    this.childTvService.requireParent(req);
     return this.childTvService.playNow(dto?.scheduleId ?? '');
   }
 
   @Post('stop')
   stop(@Req() req: Request): { success: boolean } {
-    this.childTvService.requireAuth(req);
+    this.childTvService.requireParent(req);
     return this.childTvService.stopPlayback('家长手动停止');
   }
 
+  /** 锁定：带 username 锁定指定儿童账号；不带则锁定本机 */
   @Post('lock')
-  lock(@Req() req: Request, @Body() dto: { minutes?: number }): ChildTvRuntimeStatus {
-    this.childTvService.requireAuth(req);
+  lock(
+    @Req() req: Request,
+    @Body() dto: { username?: string; minutes?: number },
+  ): ChildTvAccountInfo | ChildTvRuntimeStatus {
+    this.childTvService.requireParent(req);
+    if (dto?.username) {
+      const minutes = Number(dto.minutes) || this.childTvService.readSettings().defaultLockMinutes;
+      return this.childTvService.lockChildAccount(dto.username, minutes);
+    }
     const minutes = Number(dto?.minutes) || this.childTvService.readSettings().defaultLockMinutes;
     return this.childTvService.startLock(minutes, 'manual');
   }
 
+  /** 解锁：带 username 解锁指定儿童账号；不带则解锁本机 */
   @Post('unlock')
-  unlock(@Req() req: Request): ChildTvRuntimeStatus {
-    this.childTvService.requireAuth(req);
+  unlock(
+    @Req() req: Request,
+    @Body() dto: { username?: string },
+  ): ChildTvAccountInfo | ChildTvRuntimeStatus {
+    this.childTvService.requireParent(req);
+    if (dto?.username) {
+      return this.childTvService.unlockChildAccount(dto.username);
+    }
     return this.childTvService.unlock();
   }
 
@@ -149,6 +211,26 @@ export class ChildTvController {
     endsAt: string | null;
   } {
     return this.childTvService.getWatchStatus();
+  }
+
+  // ===== 双机同步（儿童端受控模式） =====
+
+  /** 儿童端轮询同步状态（校验 account + 绑定码） */
+  @Get('sync/state')
+  syncState(
+    @Query('account') account?: string,
+    @Query('bind') bind?: string,
+  ): ChildTvSyncState {
+    return this.childTvService.getSyncState(account ?? '', bind ?? '');
+  }
+
+  /** 儿童端 SSE 长连接：家长端状态变化实时推送 */
+  @Sse('sync/stream')
+  syncStream(
+    @Query('account') account?: string,
+    @Query('bind') bind?: string,
+  ): Observable<{ data: string }> {
+    return this.childTvService.streamSyncEvents(account ?? '', bind ?? '');
   }
 
   // ===== 浏览 / 日志 / 统计 =====

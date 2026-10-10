@@ -1,5 +1,6 @@
 import { axiosForBackend } from '@lark-apaas/client-toolkit/utils/getAxiosForBackend';
 import type {
+  ChildTvAccountInfo,
   ChildTvAuthInfo,
   ChildTvBrowseResult,
   ChildTvLogEntry,
@@ -38,14 +39,20 @@ async function request<T>(cfg: {
   return response.data as T;
 }
 
-/** 登录家长控制台，成功后保存 token */
-export async function childTvLogin(username: string, password: string): Promise<void> {
-  const res = await request<{ token: string; username: string }>({
+/** 登录控制台（家长/儿童账号），成功后保存 token */
+export async function childTvLogin(username: string, password: string): Promise<{
+  token: string;
+  username: string;
+  role: 'parent' | 'child';
+  displayName: string;
+}> {
+  const res = await request<{ token: string; username: string; role: 'parent' | 'child'; displayName: string }>({
     url: '/api/child-tv/login',
     method: 'POST',
     data: { username, password },
   });
   setChildTvToken(res.token);
+  return res;
 }
 
 export function childTvLogout(): void {
@@ -57,7 +64,7 @@ export async function childTvMe(): Promise<ChildTvAuthInfo> {
   try {
     return await request<ChildTvAuthInfo>({ url: '/api/child-tv/me', method: 'GET' });
   } catch {
-    return { loggedIn: false, username: '', pinEnabled: false };
+    return { loggedIn: false, username: '', role: null, displayName: '', pinEnabled: false };
   }
 }
 
@@ -66,6 +73,38 @@ export async function childTvCheckPin(pin: string): Promise<{ ok: boolean }> {
     url: '/api/child-tv/pin-check',
     method: 'POST',
     data: { pin },
+  });
+}
+
+// ===== 账号管理（家长） =====
+
+export async function childTvListAccounts(): Promise<ChildTvAccountInfo[]> {
+  return request<ChildTvAccountInfo[]>({ url: '/api/child-tv/accounts', method: 'GET' });
+}
+
+export async function childTvCreateAccount(dto: {
+  username: string;
+  password: string;
+  displayName?: string;
+}): Promise<ChildTvAccountInfo> {
+  return request<ChildTvAccountInfo>({
+    url: '/api/child-tv/accounts',
+    method: 'POST',
+    data: dto,
+  });
+}
+
+export async function childTvBindAccount(username: string): Promise<ChildTvAccountInfo> {
+  return request<ChildTvAccountInfo>({
+    url: `/api/child-tv/accounts/${encodeURIComponent(username)}/bind`,
+    method: 'POST',
+  });
+}
+
+export async function childTvDeleteAccount(username: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>({
+    url: `/api/child-tv/accounts/${encodeURIComponent(username)}`,
+    method: 'DELETE',
   });
 }
 
@@ -115,16 +154,20 @@ export async function childTvStop(): Promise<{ success: boolean }> {
   return request<{ success: boolean }>({ url: '/api/child-tv/stop', method: 'POST' });
 }
 
-export async function childTvLock(minutes?: number): Promise<ChildTvRuntimeStatus> {
-  return request<ChildTvRuntimeStatus>({
+export async function childTvLock(username?: string, minutes?: number): Promise<ChildTvRuntimeStatus | ChildTvAccountInfo> {
+  return request<ChildTvRuntimeStatus | ChildTvAccountInfo>({
     url: '/api/child-tv/lock',
     method: 'POST',
-    data: minutes ? { minutes } : {},
+    data: { ...(username ? { username } : {}), ...(minutes ? { minutes } : {}) },
   });
 }
 
-export async function childTvUnlock(): Promise<ChildTvRuntimeStatus> {
-  return request<ChildTvRuntimeStatus>({ url: '/api/child-tv/unlock', method: 'POST' });
+export async function childTvUnlock(username?: string): Promise<ChildTvRuntimeStatus | ChildTvAccountInfo> {
+  return request<ChildTvRuntimeStatus | ChildTvAccountInfo>({
+    url: '/api/child-tv/unlock',
+    method: 'POST',
+    data: username ? { username } : {},
+  });
 }
 
 export async function childTvStatus(): Promise<ChildTvRuntimeStatus> {
