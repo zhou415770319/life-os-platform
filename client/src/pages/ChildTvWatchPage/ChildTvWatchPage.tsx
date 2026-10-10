@@ -82,16 +82,35 @@ export default function ChildTvWatchPage() {
   }, []);
 
   // 观看页免登录只读状态（含 PIN 开关，无需鉴权接口）
+  // 低频轮询（30s）仅作状态对时，剩余分钟由前端基于 endsAt 本地倒计时，无需高频请求
   const { data: status, isFetching } = useQuery({
     queryKey: ['child-tv-watch'],
     queryFn: childTvApi.childTvWatchStatus,
-    refetchInterval: 5000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
+
+  // 本地倒计时：基于服务端 endsAt 每秒本地计算剩余分钟，接口不再高频调用
+  const [localRemaining, setLocalRemaining] = useState<number | null>(null);
+  useEffect(() => {
+    const update = () => {
+      if (!status?.endsAt) {
+        setLocalRemaining(status?.remainingMinutes ?? null);
+        return;
+      }
+      const ends = Date.parse(status.endsAt);
+      const rem = Math.max(0, Math.ceil((ends - Date.now()) / 60_000));
+      setLocalRemaining(Number.isFinite(rem) ? rem : null);
+    };
+    update();
+    const t = setInterval(update, 1000);
+    return () => clearInterval(t);
+  }, [status?.endsAt, status?.remainingMinutes]);
 
   const playing = status?.playing ?? false;
   const locked = status?.locked ?? false;
   const currentTitle = status?.currentTitle ?? '';
-  const remaining = status?.remainingMinutes ?? null;
+  const remaining = localRemaining;
   const next = status?.nextSchedule ?? null;
   const pinEnabled = !!status?.pinEnabled;
   const now = nowRef.current;
