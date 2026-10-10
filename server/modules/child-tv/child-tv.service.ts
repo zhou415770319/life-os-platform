@@ -88,7 +88,8 @@ const LOCK_SCRIPT_FILE = '.child-tv-lock.ps1';
 const M3U_FILE = 'child-tv-playlist.m3u';
 const SECRET_FILE = 'child-tv-secret.txt';
 const LOCKS_FILE = 'child-tv-locks.json';
-const SYNC_INTERVAL_MS = 10_000;
+/** 受控模式 SSE 断线后重连间隔（毫秒） */
+const SYNC_RECONNECT_MS = 3_000;
 
 @Injectable()
 export class ChildTvService implements OnModuleInit, OnModuleDestroy {
@@ -774,6 +775,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       updatedAt: now,
     };
     this.schedulesStore.create(row);
+    this.bumpSync();
+    this.broadcast({ type: 'schedule-change', account: '*' });
     this.log('info', `新增时段「${row.name}」${row.start} 起 ${row.durationMinutes} 分钟`);
     return row;
   }
@@ -789,6 +792,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       updatedAt: new Date().toISOString(),
     });
     if (!updated) throw new NotFoundException('时段不存在');
+    this.bumpSync();
+    this.broadcast({ type: 'schedule-change', account: '*' });
     this.log('info', `修改时段「${updated.name}」`);
     return updated;
   }
@@ -796,6 +801,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   deleteSchedule(id: string): { success: boolean } {
     const removed = this.schedulesStore.remove(id);
     if (!removed) throw new NotFoundException('时段不存在');
+    this.bumpSync();
+    this.broadcast({ type: 'schedule-change', account: '*' });
     this.log('info', `删除时段「${removed.name}」`);
     return { success: true };
   }
@@ -1335,8 +1342,6 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     const conn: SseConnection = { account, subject };
     this.sseClients.push(conn);
     this.log('info', `儿童端「${account}」已连接同步通道`);
-    // 建立连接即推送初始状态（含时段表与锁定状态）
-    subject.next({ data: JSON.stringify({ type: 'init', ...this.getSyncState(account, bind) }) });
     const ping = setInterval(() => subject.next({ data: JSON.stringify({ type: 'ping' }) }), 25_000);
     return new Observable<{ data: string }>((observer) => {
       const sub = subject.subscribe({
@@ -1344,6 +1349,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
         error: (e) => observer.error(e),
         complete: () => observer.complete(),
       });
+      // 订阅建立后再推送 init 全量状态（热流在订阅前 next 会丢失，必须在订阅回调内推送）
+      observer.next({ data: JSON.stringify({ type: 'init', ...this.getSyncState(account, bind) }) });
       return () => {
         sub.unsubscribe();
         clearInterval(ping);
@@ -1366,7 +1373,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
 
   // -------- 儿童端受控模式（本机执行端） --------
 
-  /** 受控模式主循环：先轮询校准状态，再建立 SSE 长连接实时接收指令；断线自动重连 */
+  /** 受控模式主循环：建立 SSE 长连接实时接收指令，断线自动重连（重连后 init 事件全量校准，无需轮询） */
   private async controlledSyncLoop(): Promise<void> {
     while (this.controlledActive) {
       const settings = this.readSettings();
@@ -1378,25 +1385,14 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
           await this.sleep(15_000);
           continue;
         }
-        // 先拉一次全量状态校准（覆盖 SSE 断线期间的变化）
-        await this.controlledPollOnce(base, q);
-        // 建立 SSE 长连接（60 秒超时保护，断线后外层循环重连）
+        // 纯通知驱动：SSE 长连接接收家长端推送（服务端每 25s ping 保活）；
+        // 断线后外层循环立即重连，重连建立时服务端推送 init 全量状态校准
         await this.controlledSse(base, q);
       } catch (e) {
-        this.log('warn', `受控同步中断：${e instanceof Error ? e.message : String(e)}，10 秒后重试`);
+        this.log('warn', `受控同步中断：${e instanceof Error ? e.message : String(e)}，3 秒后重连`);
       }
-      await this.sleep(SYNC_INTERVAL_MS);
+      await this.sleep(SYNC_RECONNECT_MS);
     }
-  }
-
-  /** 轮询校准：应用家长端全量状态 */
-  private async controlledPollOnce(base: string, q: string): Promise<void> {
-    const res = await fetch(`${base}/api/child-tv/sync/state?${q}`, {
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!res.ok) throw new Error(`同步接口 HTTP ${res.status}`);
-    const state = (await res.json()) as ChildTvSyncState;
-    this.applyRemoteState(state);
   }
 
   /** 将家长端状态应用到本机（儿童端执行器） */
@@ -1457,8 +1453,13 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     if (!dataLine) return;
     try {
       const evt = JSON.parse(dataLine.slice(5).trim()) as ChildTvSyncEvent;
-      if (evt.type === 'ping') return;
       const my = this.readSettings().controlled?.childUsername ?? '';
+      // init：SSE 建立/重连时服务端推送的全量状态，直接应用（纯通知驱动的重连校准）
+      if (evt.type === 'init') {
+        this.applyRemoteState(evt as unknown as ChildTvSyncState);
+        return;
+      }
+      if (evt.type === 'ping') return;
       if (evt.account !== my && evt.account !== '*') return;
       this.log('info', `受控指令：${evt.type}${evt.account === '*' ? '（全体）' : ''}`);
       switch (evt.type) {
@@ -1478,11 +1479,33 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
         case 'stop':
           this.stopPlayback('家长端停止');
           break;
+        case 'schedule-change':
+          // 家长端时段表变更：收到通知后仅拉取一次全量状态校准（非轮询）
+          void this.pullSyncStateOnce();
+          break;
         default:
           break;
       }
     } catch {
       /* 忽略无法解析的事件帧 */
+    }
+  }
+
+  /** 收到通知后拉取一次家长端全量状态并应用（仅事件触发时调用，非轮询） */
+  private async pullSyncStateOnce(): Promise<void> {
+    const settings = this.readSettings();
+    const base = (settings.controlled?.parentUrl ?? '').replace(/\/+$/, '');
+    if (!base || !settings.controlled?.childUsername || !settings.controlled?.bindCode) return;
+    const q = `account=${encodeURIComponent(settings.controlled.childUsername)}&bind=${encodeURIComponent(settings.controlled.bindCode)}`;
+    try {
+      const res = await fetch(`${base}/api/child-tv/sync/state?${q}`, {
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return;
+      const state = (await res.json()) as ChildTvSyncState;
+      this.applyRemoteState(state);
+    } catch {
+      /* 网络瞬时失败忽略，等下一次通知 */
     }
   }
 

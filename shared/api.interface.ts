@@ -849,9 +849,9 @@ export interface ChildTvSyncState {
   serverTime: string;
 }
 
-/** 家长端 SSE 广播事件载荷 */
+/** 家长端 SSE 广播事件载荷（init 为连接建立/重连时推送的全量同步状态） */
 export interface ChildTvSyncEvent {
-  type: 'lock' | 'unlock' | 'play' | 'stop' | 'schedule-change' | 'ping';
+  type: 'init' | 'lock' | 'unlock' | 'play' | 'stop' | 'schedule-change' | 'ping';
   account: string;
   scheduleId?: string | null;
   title?: string;
