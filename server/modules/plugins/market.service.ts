@@ -408,7 +408,10 @@ export class MarketService implements OnModuleInit {
 
     const dir = this.pluginDir(safeKey);
     if (!fs.existsSync(dir)) {
-      throw new NotFoundException(`本地插件目录不存在：user-data/plugins/${safeKey}`);
+      throw new NotFoundException(
+        `本地插件目录不存在：user-data/plugins/${safeKey}。` +
+          '内置插件会在服务启动时自动生成标准插件包（manifest.json + plugin.js + README.md），请重启服务后重试。',
+      );
     }
     const manifest = this.readManifest(safeKey);
     if (!manifest) {

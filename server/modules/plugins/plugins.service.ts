@@ -7,6 +7,8 @@
   ConflictException,
   OnModuleInit,
 } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
 import { eq, ne, like, ilike, and, or, desc, asc, count, gte, lte, gt, lt, sql } from '@server/storage/drizzle-compat';
@@ -328,12 +330,123 @@ export class PluginsService implements OnModuleInit {
               capabilities: plugin.capabilities as unknown as string[],
             },
           });
+        // 统一插件结构：为内置插件生成标准插件包（manifest.json + plugin.js + README.md）
+        // 与线上市场安装的插件（user-data/plugins/<key>/）保持同一目录结构，
+        // 使内置插件同样支持「提交到插件市场」。
+        this.ensureSeedPluginPackage(plugin);
       }
       this.logger.log(`Plugin seed complete, ${SEED_PLUGINS.length} plugins checked`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`Failed to seed plugins: ${message}`, stack);
+    }
+  }
+
+  // ===== 统一插件结构：内置插件生成标准插件包 =====
+
+  private get pluginsRoot(): string {
+    return path.join(process.cwd(), 'user-data', 'plugins');
+  }
+
+  /**
+   * 为内置插件生成/更新标准插件包，与线上市场安装的插件保持同一目录结构：
+   *   user-data/plugins/<pluginKey>/
+   *     ├── manifest.json   （市场清单声明，MarketPluginDef 格式）
+   *     ├── plugin.js       （入口文件：内置插件为平台代码集成型，此文件为占位说明）
+   *     └── README.md       （功能说明 / 页面入口 / 数据位置 / 使用方式）
+   */
+  private ensureSeedPluginPackage(seed: SeedPluginDef): void {
+    try {
+      const dir = path.join(this.pluginsRoot, seed.pluginKey);
+      fs.mkdirSync(dir, { recursive: true });
+      const cfg = seed.config;
+
+      const manifest = {
+        pluginKey: seed.pluginKey,
+        name: seed.name,
+        description: seed.description,
+        version: seed.version,
+        category: seed.category === 'core' ? '核心模块' : seed.category,
+        cardIcon: cfg.cardIcon || 'puzzle',
+        routePath: cfg.routePath || '/',
+        gradientFrom: cfg.gradientFrom || '#6366f1',
+        gradientTo: cfg.gradientTo || '#8b5cf6',
+        entry: 'plugin.js',
+        files: ['plugin.js', 'README.md'],
+      };
+
+      fs.writeFileSync(
+        path.join(dir, 'manifest.json'),
+        JSON.stringify(manifest, null, 2),
+        'utf-8',
+      );
+
+      const pluginJs = `/**
+ * ${seed.name}（${seed.pluginKey}）— 平台内置集成插件
+ *
+ * 本插件为 Life-OS 平台内置实现：前端页面与后端逻辑已深度集成在主工程代码中
+ * （client/src 页面组件 + server/modules 业务模块），并非独立分发的 plugin.js 运行时。
+ *
+ * 本文件仅为满足插件市场统一结构而生成的入口占位文件，安装/卸载由插件中心
+ * 的「启用 / 暂停 / 卸载」生命周期统一管理。
+ *
+ * 版本：${seed.version}
+ * 入口页面：${cfg.routePath || '/'}
+ */
+'use strict';
+
+module.exports = {
+  key: '${seed.pluginKey}',
+  name: '${seed.name}',
+  version: '${seed.version}',
+  builtin: true,
+  routePath: '${cfg.routePath || '/'}',
+};
+`;
+
+      fs.writeFileSync(path.join(dir, 'plugin.js'), pluginJs, 'utf-8');
+
+      const readme = `# ${seed.name}
+
+> ${seed.description}
+
+## 基本信息
+
+| 字段 | 值 |
+| --- | --- |
+| 插件 Key | \`${seed.pluginKey}\` |
+| 版本 | ${seed.version} |
+| 分类 | ${seed.category} |
+| 入口页面 | \`${cfg.routePath || '/'}\` |
+| 类型 | 平台内置集成插件 |
+
+## 说明
+
+本插件为 Life-OS 平台内置集成插件，页面与后端逻辑随主工程一起开发维护，
+由「插件中心」统一管理启用 / 暂停 / 卸载。
+
+## 页面入口
+
+访问 \`${cfg.routePath || '/'}\` 进入插件主页面。
+
+## 数据存储
+
+插件数据保存在本地 \`user-data/plugins-data/${seed.pluginKey}/\` 目录，
+遵循「本地文件存储优先，后期可切换线上数据库」的项目规则。
+
+## 使用方式
+
+- 在插件中心启用后，侧边栏导航将自动出现对应菜单；
+- 插件暴露的 AI 方法可在 AI 聊天框中使用自然语言调用（在插件中心详情页可查看方法列表）。
+`;
+
+      fs.writeFileSync(path.join(dir, 'README.md'), readme, 'utf-8');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Failed to generate plugin package for ${seed.pluginKey}: ${message}`,
+      );
     }
   }
 
