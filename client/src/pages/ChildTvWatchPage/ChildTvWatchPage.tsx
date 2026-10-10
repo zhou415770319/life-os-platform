@@ -211,7 +211,7 @@ export default function ChildTvWatchPage() {
 
       {/* 受控模式连接状态（右上角，低对比） */}
       {remoteActive && (
-        <div className="absolute top-8 right-8 flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-400">
+        <div className="absolute top-8 right-20 flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-400">
           {locked ? (
             <>
               <Lock className="h-3 w-3 text-rose-400" />
@@ -226,11 +226,11 @@ export default function ChildTvWatchPage() {
         </div>
       )}
 
-      {/* 设置入口（右下角，低对比） */}
+      {/* 设置入口（右上角，低对比） */}
       <button
         onClick={() => setConfigOpen(true)}
         title="设置 / 登录"
-        className="absolute bottom-8 right-8 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-500 transition hover:bg-white/[0.08] hover:text-zinc-300"
+        className="absolute top-8 right-8 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-500 transition hover:bg-white/[0.08] hover:text-zinc-300"
       >
         <SettingsIcon className="h-4 w-4" />
       </button>
