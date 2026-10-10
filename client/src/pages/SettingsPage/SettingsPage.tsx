@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Settings, Puzzle, ScrollText, Database, KeyRound } from 'lucide-react';
+import { Settings, Puzzle, Store, ScrollText, Database, KeyRound } from 'lucide-react';
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
 import { pluginsApi } from '@client/src/api';
@@ -9,11 +9,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@client/src/components
 import { useConfirmDialog } from '@client/src/hooks/use-confirm-dialog';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
 import PluginCenterTab from './components/PluginCenterTab';
+import PluginMarketTab from './components/PluginMarketTab';
 import AiSettingsTab from './components/AiSettingsTab';
 import LifeLogPage from '../LifeLogPage/LifeLogPage';
 import DataManagerPage from '../DataManagerPage/DataManagerPage';
 
-const TAB_KEYS = ['plugins', 'life-log', 'data', 'ai'] as const;
+const TAB_KEYS = ['plugins', 'market', 'life-log', 'data', 'ai'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 const SettingsPage = () => {
@@ -177,6 +178,10 @@ const SettingsPage = () => {
             <Puzzle className="w-4 h-4 mr-2" />
             插件中心
           </TabsTrigger>
+          <TabsTrigger value="market" className="data-[state=active]:bg-white/10">
+            <Store className="w-4 h-4 mr-2" />
+            插件市场
+          </TabsTrigger>
           <TabsTrigger value="life-log" className="data-[state=active]:bg-white/10">
             <ScrollText className="w-4 h-4 mr-2" />
             人生日志
@@ -203,6 +208,19 @@ const SettingsPage = () => {
             onUninstall={handleUninstall}
             onSuspend={handleSuspend}
             onResume={handleResume}
+            onDataChanged={refreshData}
+          />
+        </TabsContent>
+
+        <TabsContent value="market">
+          <PluginMarketTab
+            plugins={availablePlugins}
+            installedPlugins={installedPlugins}
+            loading={loadingAvailable || loadingInstalled}
+            installingKey={installingKey}
+            uninstallingKey={uninstallingKey}
+            onInstall={handleInstall}
+            onUninstall={handleUninstall}
             onDataChanged={refreshData}
           />
         </TabsContent>

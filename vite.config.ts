@@ -10,6 +10,13 @@ export default defineConfig(
       alias: {
         '@': path.resolve(__dirname, 'client/src'),
       },
+      // 强制 React 单副本：MiaoDa 壳（@lark-apaas/client-toolkit）内置了一份 React，
+      // 依赖重优化后若我们的 import 'react' 解析到另一份，会出现
+      // 「Invalid hook call」「removeChild NotFoundError」等双 React 崩溃。
+      dedupe: ['react', 'react-dom', 'react/jsx-runtime'],
+    },
+    optimizeDeps: {
+      include: ['react', 'react-dom', 'react-dom/client'],
     },
     server: {
       port: Number(loadEnv('development', process.cwd(), '').CLIENT_PORT || 5173),

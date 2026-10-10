@@ -81,4 +81,17 @@ const MainApp = () => {
   );
 };
 
-createRoot(document.getElementById('root')!).render(<MainApp />);
+// 幂等挂载：vite 依赖重优化 / HMR full-reload 会导致本模块重复执行，
+// 若直接再次 createRoot 会因容器已被占用而抛
+// 「createRoot() on a container that has already been passed to createRoot()」。
+// 通过 window 全局句柄复用已有 root，避免双 root 冲突导致的 removeChild 崩溃。
+const container = document.getElementById('root')!;
+const existingRoot = (window as unknown as { __lifeOsReactRoot?: ReturnType<typeof createRoot> })
+  .__lifeOsReactRoot;
+if (existingRoot) {
+  existingRoot.render(<MainApp />);
+} else {
+  const root = createRoot(container);
+  (window as unknown as { __lifeOsReactRoot: ReturnType<typeof createRoot> }).__lifeOsReactRoot = root;
+  root.render(<MainApp />);
+}
