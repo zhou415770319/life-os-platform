@@ -209,8 +209,8 @@ const AiChat = () => {
     [findPluginId],
   );
 
-  const handleSend = useCallback(async () => {
-    const text = inputValue.trim();
+  const sendMessage = useCallback(async (rawText: string) => {
+    const text = rawText.trim();
     if (!text || isLoading) return;
 
     const userMsg: ChatMessage = {
@@ -316,7 +316,24 @@ const AiChat = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [inputValue, isLoading, messages, togglePlugin, activeSessionId, loadSessions, deepMode]);
+  }, [isLoading, messages, togglePlugin, activeSessionId, loadSessions, deepMode]);
+
+  const handleSend = useCallback(() => {
+    sendMessage(inputValue);
+  }, [inputValue, sendMessage]);
+
+  // 全局事件：其他页面（如插件中心「提交到市场」）可唤起聊天框并自动发送消息
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ text?: string }>).detail;
+      const text = detail?.text ?? '';
+      if (!text.trim()) return;
+      setIsOpen(true);
+      sendMessage(text);
+    };
+    window.addEventListener('life-os:ai-chat:send', handler);
+    return () => window.removeEventListener('life-os:ai-chat:send', handler);
+  }, [sendMessage]);
 
   const handleClose = () => {
     setIsOpen(false);

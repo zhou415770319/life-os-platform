@@ -464,6 +464,8 @@ export interface PluginMethod {
   pluginKey: string;
   params: PluginMethodParam[];
   dangerous?: boolean;
+  /** 系统级方法：不绑定具体插件，注册即对所有已登录用户可用（如提交插件到市场） */
+  system?: boolean;
 }
 
 export interface ToolCallIntent {

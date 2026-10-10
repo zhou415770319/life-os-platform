@@ -1,4 +1,10 @@
-import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { PluginsService } from './plugins.service';
 import { ChildResourcesService } from '@server/modules/child-resources/child-resources.service';
 import { GoalsService } from '@server/modules/goals/goals.service';
@@ -1092,7 +1098,8 @@ export class PluginMethodRegistry {
 
     const items: PluginMethod[] = [];
     for (const handler of this.methods.values()) {
-      if (installedKeys.has(handler.method.pluginKey)) {
+      // 系统级方法不依赖插件安装状态，始终可用
+      if (handler.method.system || installedKeys.has(handler.method.pluginKey)) {
         items.push(handler.method);
       }
     }
@@ -1127,6 +1134,67 @@ export class PluginMethodRegistry {
     const { items: allPlugins } = await this.pluginsService.getInstalledPlugins();
 
     if (method) {
+      // 系统级方法：不依赖具体插件启用状态
+      if (method.system) {
+        pluginEnabled = true;
+        methodExists = true;
+        pluginName = method.name;
+        steps.push({
+          step: 'plugin_enabled',
+          status: 'pass',
+          title: `系统能力「${method.name}」可用`,
+          detail: '系统级方法，无需安装插件即可调用。',
+        });
+        steps.push({
+          step: 'method_exists',
+          status: 'pass',
+          title: `找到方法「${method.name}」`,
+          detail: method.description,
+        });
+        const validation = this.validateParams(method, args);
+        missingParams = validation.missing;
+        paramErrors = validation.errors;
+        paramsValid = validation.valid;
+        if (paramsValid) {
+          steps.push({
+            step: 'params_check',
+            status: 'pass',
+            title: '参数校验通过',
+            detail: '所有必填参数已提供，即将执行。',
+          });
+        } else {
+          const parts: string[] = [];
+          if (missingParams.length > 0) {
+            const missingDetail = missingParams
+              .map((name) => {
+                const p = method!.params.find((pp) => pp.name === name);
+                return p ? `• ${name}（${p.description}）` : `• ${name}`;
+              })
+              .join('\n');
+            parts.push(`缺少必填参数：\n${missingDetail}`);
+          }
+          if (paramErrors.length > 0) {
+            parts.push(`参数错误：${paramErrors.join('；')}`);
+          }
+          steps.push({
+            step: 'params_check',
+            status: 'fail',
+            title: '参数不完整，需要补充信息',
+            detail: parts.join('\n\n'),
+          });
+        }
+        return {
+          steps,
+          pluginEnabled,
+          methodExists,
+          paramsValid,
+          method,
+          missingParams,
+          paramErrors,
+          pluginName,
+        };
+      }
+
       const plugin = allPlugins.find(
         (p) => p.pluginKey === method.pluginKey && p.lifecycleStatus === 'active',
       );
@@ -1287,6 +1355,22 @@ export class PluginMethodRegistry {
     }
 
     const method = handler.method;
+
+    // 系统级方法：跳过插件安装/启用检查
+    if (method.system) {
+      const { valid, missing, errors } = this.validateParams(method, args);
+      if (!valid) {
+        const messages: string[] = [];
+        if (missing.length > 0) {
+          messages.push(`缺少必填参数：${missing.join('、')}`);
+        }
+        if (errors.length > 0) {
+          messages.push(...errors);
+        }
+        throw new BadRequestException(messages.join('；'));
+      }
+      return handler.execute(args, userId);
+    }
 
     const { items: installedPlugins } = await this.pluginsService.getInstalledPlugins();
     const isInstalled = installedPlugins.some((p) => p.pluginKey === method.pluginKey && p.lifecycleStatus === 'active');
@@ -1875,5 +1959,18 @@ export class PluginMethodRegistry {
       const items = this.childTvService.getStats();
       return { items, total: items.length };
     });
+  }
+
+  // ===== 系统级方法（不绑定插件，注册即用） =====
+
+  /**
+   * 注册系统级方法：不依赖插件安装状态，对所有已登录用户可用。
+   * 由依赖方（如 MarketService）在初始化时调用。
+   */
+  registerSystemMethod(
+    method: PluginMethod,
+    execute: (args: Record<string, unknown>, userId: string) => Promise<unknown>,
+  ): void {
+    this.register({ ...method, system: true }, execute);
   }
 }

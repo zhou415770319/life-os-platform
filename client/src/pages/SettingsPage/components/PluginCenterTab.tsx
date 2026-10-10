@@ -12,6 +12,7 @@ import {
   Globe,
   RefreshCw,
   Trash2,
+  Send,
 } from 'lucide-react';
 import type { AvailablePlugin, InstalledPlugin, MarketPluginItem } from '@shared/api.interface';
 import {
@@ -27,6 +28,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@client/src/components
 import { getPluginIcon } from '@client/src/utils/plugin-icons';
 import { marketApi } from '@client/src/api';
 import { toast } from 'sonner';
+import { showConfirm } from '@lark-apaas/client-toolkit';
 import PluginDetailDialog from './PluginDetailDialog';
 import MechanismTab from '../../PluginCenterPage/MechanismTab';
 import DevelopmentTab from '../../PluginCenterPage/DevelopmentTab';
@@ -148,6 +150,21 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
     }
   };
 
+  /** 提交插件到市场：唤起 AI 聊天框并自动发送提交指令（由 AI 代办建分支 + PR） */
+  const handleSubmitToMarket = async (plugin: { pluginKey: string; name: string }) => {
+    const ok = await showConfirm(
+      `将「${plugin.name}」提交到 GitHub 插件市场？\n\n系统会唤起 AI 助手，自动新建分支并创建 Pull Request，由仓库管理员 review 审核后合并（不会自动合并）。`,
+    );
+    if (!ok) return;
+    window.dispatchEvent(
+      new CustomEvent('life-os:ai-chat:send', {
+        detail: {
+          text: `请把插件「${plugin.name}」（${plugin.pluginKey}）提交到插件市场：基于 main 新建分支、上传插件文件并更新市场清单、创建 Pull Request 请求仓库管理员 review 审核，不要自动合并。`,
+        },
+      }),
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* 统一插件市场：插件市场 + 已安装合并 */}
@@ -246,6 +263,19 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
                           <div className="flex items-center gap-1.5">
                             {enabled || disabled ? (
                               <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={busy || plugin.isCore}
+                                  className="h-7 px-2 text-xs border-white/10 text-indigo-300 hover:text-indigo-200 hover:border-indigo-500/40"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSubmitToMarket(plugin);
+                                  }}
+                                >
+                                  <Send className="w-3 h-3 mr-1" />
+                                  提交市场
+                                </Button>
                                 <Button
                                   size="sm"
                                   variant="outline"
@@ -381,6 +411,16 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
                       <div className="flex flex-col items-end gap-2 shrink-0">
                         {item.installed ? (
                           <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              className="h-7 px-2 text-xs border-white/10 text-indigo-300 hover:text-indigo-200 hover:border-indigo-500/40"
+                              onClick={() => handleSubmitToMarket(item)}
+                            >
+                              <Send className="w-3 h-3 mr-1" />
+                              提交市场
+                            </Button>
                             {hasUpdate && (
                               <Button
                                 size="sm"
