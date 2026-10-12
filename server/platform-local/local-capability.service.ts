@@ -6,9 +6,18 @@ interface CapabilityCallResult {
   [key: string]: unknown;
 }
 
+export interface TextGenerateOptions {
+  /** 模型用途：chat(默认) / deep / agent / plugin；也可直接传 providerId:modelId */
+  modelKey?: string;
+  /** 覆盖温度 */
+  temperature?: number;
+  /** 覆盖最大 token */
+  maxTokens?: number;
+}
+
 /**
  * 本地模式 AI 能力服务（替代平台 CapabilityService）
- * 配置优先级：设置页用户配置的 API Key > 环境变量（LOCAL_AI_API_KEY）> 提示配置
+ * 配置优先级：模型服务平台（仿 Cherry Studio，按用途分配默认模型）> 设置页旧单配置 > 环境变量 > 默认
  * 兼容 OpenAI Chat Completions 协议。
  */
 @Injectable()
@@ -26,7 +35,9 @@ export class LocalCapabilityService {
         params: Record<string, unknown>,
       ): Promise<CapabilityCallResult> => {
         if (method === 'textGenerate') {
-          const content = await this.textGenerate(params);
+          const content = await this.textGenerate(params, {
+            modelKey: typeof params._model_usage === 'string' ? params._model_usage : undefined,
+          });
           return { content };
         }
         throw new Error(`Unsupported capability method: ${method}`);
@@ -34,9 +45,31 @@ export class LocalCapabilityService {
     };
   }
 
-  private async textGenerate(params: Record<string, unknown>): Promise<string> {
-    // 生效配置：用户配置 > 环境变量 > 默认
-    const eff = this.aiSettingsService.getEffectiveConfig();
+  /**
+   * 供插件云函数 ctx.llm 等调用的公开入口
+   * @param params.system 系统提示词（可选）
+   * @param params.prompt 用户问题（必填）
+   * @param opts.modelKey 指定用途或 providerId:modelId；默认 'plugin'
+   */
+  async generateText(
+    params: { system?: string; prompt: string },
+    opts?: TextGenerateOptions,
+  ): Promise<string> {
+    return this.textGenerate(
+      {
+        system_context: params.system ?? '',
+        user_question: params.prompt,
+      },
+      opts,
+    );
+  }
+
+  private async textGenerate(
+    params: Record<string, unknown>,
+    opts?: TextGenerateOptions,
+  ): Promise<string> {
+    // 生效配置：按用途解析（平台分配 > 旧配置 > 环境变量 > 默认）
+    const eff = this.aiSettingsService.resolveChatConfig(opts?.modelKey ?? 'chat');
     const apiKey = eff.apiKey;
     const baseUrl = this.aiSettingsService.normalizeBaseUrl(eff.baseUrl);
     const model = eff.model;
@@ -45,7 +78,7 @@ export class LocalCapabilityService {
 
     if (!apiKey) {
       throw new Error(
-        '未配置 AI API Key。请到「系统设置 → AI 配置」填写你自己的 API Key 后使用，或在 .env 中设置 LOCAL_AI_API_KEY。',
+        '未配置 AI API Key。请到「系统设置 → AI 配置」配置模型服务平台与 API Key 后使用，或在 .env 中设置 LOCAL_AI_API_KEY。',
       );
     }
 
@@ -61,7 +94,8 @@ export class LocalCapabilityService {
           { role: 'system', content: systemContext },
           { role: 'user', content: userQuestion },
         ],
-        temperature: 0.7,
+        temperature: opts?.temperature ?? 0.7,
+        ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}),
       }),
     });
 

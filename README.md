@@ -47,7 +47,7 @@ Life-OS 是一个高度模块化的人生管理系统，基于 DSH (Dynamic Serv
 | 后端框架    | NestJS 10 + TypeScript                           |
 | 数据库 ORM | Drizzle ORM（本地适配层，默认 JSON 存储）                    |
 | 数据存储    | 本地 JSON 文件（`user-data/*.json`），后期可切 PostgreSQL   |
-| AI 能力   | 自配 API Key（OpenAI 兼容接口，如 SiliconFlow / DeepSeek） |
+| AI 能力   | 多模型服务平台（仿 Cherry Studio，OpenAI 兼容：SiliconFlow / DeepSeek 等）+ 按用途默认模型 |
 
 ## 项目结构
 
@@ -253,21 +253,27 @@ node scripts/seed-local-data.js
 
 ### 第 5 步：配置 AI 对话（可选）
 
-AI 助手支持两种配置方式：
+AI 助手支持三种配置方式（按优先级生效）：
 
+1. **模型服务平台（推荐，仿 Cherry Studio）**：打开系统设置 → AI 配置，可添加**多个模型平台**（任意 OpenAI 兼容协议，如 DeepSeek / 硅基流动 / OpenAI / Moonshot / 通义千问等），每个平台独立配置：
 
+   * Base URL（如 `https://api.deepseek.com/v1`、`https://api.siliconflow.cn/v1`）
+   * API Key（仅保存在本地 `user-data/ai-providers.json`）
+   * 「获取模型」一键拉取平台模型列表，或手动添加模型；模型可单独启用/停用
+   * 「测试」验证平台连通性（可指定模型）
 
-1. **应用内配置**（推荐）：打开系统设置 → AI 配置，填写：
+2. **默认模型分配（按用途）**：在 AI 配置页可分别为以下场景配置默认模型（未设置时自动选择第一个可用模型）：
 
-* API Key（如 SiliconFlow / DeepSeek 等 OpenAI 兼容接口的 Key）
+   | 用途 | 场景 |
+   |------|------|
+   | 人生系统助手（普通） | 日常聊天、快捷功能、插件数据操作 |
+   | 人生系统助手（深度模式） | 注入习惯/目标/任务等实时数据后的深度分析 |
+   | 系统助手（创建/修改插件） | 辅助创建插件、修改插件功能的系统任务 |
+   | 插件默认模型 | 插件云函数 `ctx.llm.chat()` 调用模型时使用的默认模型 |
 
-* Base URL（如 `https://api.siliconflow.cn/v1`）
+3. **环境变量回退**：在 `.env` 中配置 `LOCAL_AI_API_KEY` / `LOCAL_AI_BASE_URL` / `LOCAL_AI_MODEL`（无平台配置时生效）
 
-* 模型名（如 `Qwen/Qwen3-8B`）
-
-1. **环境变量**：在 `.env` 中配置 `LOCAL_AI_API_KEY` / `LOCAL_AI_BASE_URL` / `LOCAL_AI_MODEL`
-
-> ⚠️ 未配置 API Key 时，AI 对话不可用，其余所有功能均可正常使用。配置完成后可在设置页点击「测试连接」验证。
+> ⚠️ 未配置 API Key 时，AI 对话不可用，其余所有功能均可正常使用。配置完成后可在设置页点击「测试」验证。
 
 ## 功能模块总览
 
@@ -475,7 +481,7 @@ AI 助手支持两种配置方式：
 
 * **危险方法**：`dangerous: true` 的方法（如清空数据）AI 调用时需用户确认
 
-* **示例**：`user-data/plugins/dsh-plugin-demo-fn/`（7 个方法，含增删改查 / 统计 / 回显 / 危险清空）
+* 示例：`user-data/plugins/dsh-plugin-demo-fn/`（8 个方法，含增删改查 / 统计 / 回显 / 危险清空 / 调用模型 ctx.llm）
 
 详细约定见 `docs/插件配置说明.md` 第五章节。
 
@@ -500,10 +506,11 @@ AI 助手支持两种配置方式：
 | `npm install` 报 `prepare` / `fullstack-cli` 错误 | 确认 `package.json` 的 `prepare` 为跨平台 Node 写法（见上文）                           |
 | 启动报 `EADDRINUSE: address already in use`       | 端口被之前启动的实例占用。到旧终端 Ctrl+C 停掉，或 `netstat -ano \| findstr ":<端口>"` 找到 PID 结束 |
 | 页面没变化 / 菜单没更新                                  | 确认前端刷新（HMR 正常时保存即热更新）；改端口 / 环境变量后需重启 `dev:local`                          |
-| AI 提示 "服务暂时不可用"                                | 检查 AI 配置（API Key / Base URL / 模型），在设置页点「测试连接」                             |
+| AI 提示 "服务暂时不可用"                                | 检查 AI 配置（模型服务平台 / API Key / Base URL / 模型），在设置页点「测试」；未配置任何可用模型时 AI 不可用        |
 | 历史会话看不到                                        | 聊天窗左上角菜单打开会话列表，点击会话回显；会话数据保存在 `user-data/life-ai-chat-*`                  |
 | 插件数据没出现在数据洞察                                   | 需要先在插件详情中开启「参与数据分析」开关                                                     |
 | 根路径 / 404 / 页面白屏                                   | 需用带 MiaoDa 环境变量的方式启动前端（`npm run dev:local` 或手动补齐 `MIAODA_APP_TYPE=3` / `MIAODA_LOCAL_DEV=1`），Vite root 已指向 `client/` |
+| 换电脑后插件丢失                                        | 插件包位于 `user-data/plugins/`（git 忽略），迁移时整体拷贝该目录；或从插件市场重新安装                                |
 | 换电脑后插件丢失                                        | 插件包位于 `user-data/plugins/`（git 忽略），迁移时整体拷贝该目录；或从插件市场重新安装                                |
 
 ## 免责声明

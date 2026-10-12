@@ -11,6 +11,7 @@ import type { LocalDatabase } from '@server/storage/local-database';
 import { lifePluginConfig } from '@server/database/schema';
 import { eq } from '@server/storage/drizzle-compat';
 import type { PluginMethodParam } from '@shared/api.interface';
+import { LocalCapabilityService } from '../../platform-local/local-capability.service';
 
 /** 插件云函数方法定义（server.js 中声明） */
 export interface CloudMethodDef {
@@ -39,6 +40,15 @@ export interface PluginRuntimeContext {
   writeJson: (file: string, data: unknown) => void;
   /** 受限网络能力（宿主 fetch 包装，带超时） */
   http: (url: string, init?: RequestInit) => Promise<Response>;
+  /** 大模型能力：插件可用模型完成任务（默认走「插件默认模型」分配） */
+  llm: {
+    chat: (input: {
+      prompt: string;
+      system?: string;
+      /** 可选：指定用途或 providerId:modelId，默认 plugin */
+      model?: string;
+    }) => Promise<{ content: string }>;
+  };
 }
 
 /** 插件 server.js 导出的模块结构 */
@@ -78,6 +88,7 @@ export class PluginRuntimeService implements OnApplicationBootstrap {
   constructor(
     @Inject(LOCAL_DATABASE)
     private readonly db: LocalDatabase,
+    private readonly capabilityService: LocalCapabilityService,
   ) {}
 
   /** 装配方（插件模块）注入方法注册回调 */
@@ -250,6 +261,19 @@ export class PluginRuntimeService implements OnApplicationBootstrap {
           ...init,
           signal: AbortSignal.timeout(15000),
         });
+      },
+      llm: {
+        chat: async (input: {
+          prompt: string;
+          system?: string;
+          model?: string;
+        }): Promise<{ content: string }> => {
+          const content = await this.capabilityService.generateText(
+            { system: input.system ?? '', prompt: input.prompt },
+            { modelKey: input.model || 'plugin' },
+          );
+          return { content };
+        },
       },
     };
   }

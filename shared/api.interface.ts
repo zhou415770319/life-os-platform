@@ -684,6 +684,78 @@ export interface TestAiSettingsResult {
   message: string;
 }
 
+// ===== AI 模型服务（多平台，仿 Cherry Studio） =====
+/** 模型用途：chat=人生助手普通 / deep=人生助手深度 / agent=系统助手(创建插件) / plugin=插件默认 */
+export type AiUsageKey = 'chat' | 'deep' | 'agent' | 'plugin';
+
+export interface AiModelDef {
+  /** 模型 ID（如 Qwen/Qwen3-8B、deepseek-chat） */
+  id: string;
+  /** 展示名（默认同 id，可自定义） */
+  name: string;
+  /** 上下文长度（可选） */
+  contextLength?: number;
+  /** 是否启用（启用的模型才可被选中/调用） */
+  enabled: boolean;
+  capabilities?: string[];
+}
+
+export interface AiProvider {
+  id: string;
+  /** 平台名（如 硅基流动 / DeepSeek） */
+  name: string;
+  /** OpenAI 兼容 Base URL（如 https://api.siliconflow.cn/v1） */
+  baseUrl: string;
+  apiKey: string;
+  /** 平台开关 */
+  enabled: boolean;
+  models: AiModelDef[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 对外视图：apiKey 脱敏 */
+export interface AiProviderView extends Omit<AiProvider, 'apiKey'> {
+  apiKeyMasked: string;
+  configured: boolean;
+}
+
+/** 默认模型分配（value 格式 providerId:modelId） */
+export interface AiModelAssignments {
+  chat?: string;
+  deep?: string;
+  agent?: string;
+  plugin?: string;
+}
+
+export interface SaveAiProviderDto {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  /** 空字符串/省略表示保留原 Key */
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+export interface AiProvidersView {
+  providers: AiProviderView[];
+  assignments: AiModelAssignments;
+  /** 旧版单配置（兼容回退） */
+  legacy: {
+    configured: boolean;
+    baseUrl: string;
+    model: string;
+    source: AiSettingsSource;
+  };
+  /** 所有可用模型选项（供下拉选择：value=providerId:modelId） */
+  modelOptions: { value: string; label: string; providerName: string; modelId: string }[];
+}
+
+export interface TestAiProviderResult {
+  ok: boolean;
+  message: string;
+}
+
 // ===== RPA 管理插件 =====
 export type ExcelCellValue = string | number | boolean | null;
 

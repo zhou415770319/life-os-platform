@@ -204,7 +204,11 @@ export class AiChatService {
 
     const userQuestion = this.buildUserQuestion(dto.messages);
 
-    const firstTurn = await this.callAiTextGenerate(systemPrompt, userQuestion);
+    const firstTurn = await this.callAiTextGenerate(
+      systemPrompt,
+      userQuestion,
+      dto.deepMode ? 'deep' : 'chat',
+    );
     const toolCall = this.parseToolCall(firstTurn);
 
     if (!toolCall) {
@@ -626,6 +630,7 @@ ${TOOL_CALL_END}
   private async callAiTextGenerate(
     systemContext: string,
     userQuestion: string,
+    usage: 'chat' | 'deep' | 'agent' | 'plugin' = 'chat',
   ): Promise<string> {
     try {
       const result = (await this.capabilityService
@@ -633,6 +638,7 @@ ${TOOL_CALL_END}
         .call('textGenerate', {
           system_context: systemContext,
           user_question: userQuestion,
+          _model_usage: usage,
         })) as { content?: string };
 
       return result?.content || '';
