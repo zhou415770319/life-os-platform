@@ -466,6 +466,8 @@ export interface PluginMethod {
   dangerous?: boolean;
   /** 系统级方法：不绑定具体插件，注册即对所有已登录用户可用（如提交插件到市场） */
   system?: boolean;
+  /** 动态注册方法（插件云函数 server.js / 市场通用数据操作）：卸载插件时按此标记批量注销，编译期内置方法不受影响 */
+  dynamic?: boolean;
 }
 
 export interface ToolCallIntent {

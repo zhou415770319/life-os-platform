@@ -24,6 +24,7 @@ import type {
 } from '@shared/api.interface';
 import { LifeLogService } from '@server/modules/life-log/life-log.service';
 import { PluginMethodRegistry } from './plugin-method.registry';
+import { PluginRuntimeService } from './plugin-runtime.service';
 
 const MARKET_OWNER = 'zhou415770319';
 const MARKET_REPO = 'life-os-plugins';
@@ -49,7 +50,15 @@ export class MarketService implements OnModuleInit {
     @Inject(LOCAL_DATABASE) private readonly db: LocalDatabase,
     private readonly lifeLogService: LifeLogService,
     private readonly registry: PluginMethodRegistry,
-  ) {}
+    private readonly pluginRuntime: PluginRuntimeService,
+  ) {
+    // 装配云函数运行时的方法注册回调（解耦循环依赖：runtime 不直接依赖 registry）
+    this.pluginRuntime.bindRegistrar({
+      onRegister: (pluginKey, defs, buildCtx) =>
+        this.registry.registerDynamic(pluginKey, defs, buildCtx),
+      onUnregister: (pluginKey) => this.registry.unregisterByPlugin(pluginKey),
+    });
+  }
 
   private get pluginsRoot(): string {
     return path.join(process.cwd(), 'user-data', 'plugins');
@@ -342,6 +351,9 @@ export class MarketService implements OnModuleInit {
       );
     }
 
+    // 装载云函数（manifest.serverEntry 指向 server.js）
+    await this.pluginRuntime.load(pluginKey);
+
     this.logger.log(`Market plugin installed: ${pluginKey}@${manifest.version}`);
     void this.lifeLogService.append({
       eventType: 'plugin_installed',
@@ -374,6 +386,8 @@ export class MarketService implements OnModuleInit {
       .where(eq(lifePluginConfig.pluginKey, pluginKey));
 
     this.logger.log(`Market plugin uninstalled: ${pluginKey}`);
+    // 注销云函数（文件目录已删除，方法随之移除）
+    await this.pluginRuntime.unload(pluginKey);
     void this.lifeLogService.append({
       eventType: 'plugin_uninstalled',
       eventCategory: 'plugins',
@@ -430,6 +444,10 @@ export class MarketService implements OnModuleInit {
         (m, args, userId) => this.executeMarketMethod(pluginKey, m, args, userId),
       );
     }
+
+    // 热更新云函数：先卸载旧代码（清 require 缓存）再装载新版本
+    await this.pluginRuntime.unload(pluginKey);
+    await this.pluginRuntime.load(pluginKey);
 
     this.logger.log(`Market plugin updated: ${pluginKey} -> v${manifest.version}`);
     return this.toPluginConfig(updated[0]);

@@ -26,6 +26,10 @@ import type {
   PluginMethodParam,
   PreflightCheckStep,
 } from '@shared/api.interface';
+import type {
+  CloudMethodDef,
+  PluginRuntimeContext,
+} from './plugin-runtime.service';
 
 interface MethodHandler {
   method: PluginMethod;
@@ -1078,10 +1082,66 @@ export class PluginMethodRegistry {
         params: d.params ?? [],
         kind: d.kind,
         collection: d.collection,
+        dynamic: true,
       } as PluginMethod & { kind: string; collection: string };
       this.register(method, (args, userId) => execute(method, args, userId));
     }
     this.logger.log(`Registered ${defs.length} market methods for plugin: ${pluginKey}`);
+  }
+
+  /**
+   * 动态注册插件「云函数」方法（插件自带 server.js 声明的后端能力）。
+   * 方法 ID 自动补全为 <pluginKey>.<methodName>，执行时调用插件云函数 handler。
+   * 与内置/市场方法共用同一注册表：AI 工具调用、参数预检、快捷功能自动生效。
+   *
+   * @param buildCtx 构造完整宿主上下文（dataDir/logger/http 等），由 PluginRuntimeService 提供
+   */
+  registerDynamic(
+    pluginKey: string,
+    defs: CloudMethodDef[],
+    buildCtx?: (userId: string) => PluginRuntimeContext,
+  ): void {
+    let registered = 0;
+    for (const d of defs) {
+      const method: PluginMethod = {
+        id: `${pluginKey}.${d.name}`,
+        name: d.name,
+        description: d.description,
+        pluginKey,
+        params: d.params ?? [],
+        dangerous: d.dangerous,
+        dynamic: true,
+      };
+      this.register(method, async (args, userId) =>
+        d.handler(
+          args,
+          buildCtx
+            ? buildCtx(userId)
+            : ({ userId } as unknown as PluginRuntimeContext),
+        ),
+      );
+      registered++;
+    }
+    this.logger.log(`Registered ${registered} dynamic (cloud-function) methods for plugin: ${pluginKey}`);
+  }
+
+  /**
+   * 批量注销指定插件注册的「动态方法」（云函数 server.js + 市场通用数据操作）。
+   * 编译期内置方法（dynamic 非 true）不受影响。
+   * 返回被注销的方法 ID 列表。
+   */
+  unregisterByPlugin(pluginKey: string): string[] {
+    const removed: string[] = [];
+    for (const [id, handler] of this.methods.entries()) {
+      if (handler.method.pluginKey === pluginKey && handler.method.dynamic === true) {
+        this.methods.delete(id);
+        removed.push(id);
+      }
+    }
+    if (removed.length > 0) {
+      this.logger.log(`Unregistered ${removed.length} dynamic methods for plugin: ${pluginKey}`);
+    }
+    return removed;
   }
 
   private register(

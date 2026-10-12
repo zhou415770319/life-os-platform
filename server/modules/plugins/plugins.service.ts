@@ -22,6 +22,7 @@ import type {
   PluginLifecycleStatus,
 } from '@shared/api.interface';
 import { LifeLogService } from '@server/modules/life-log/life-log.service';
+import { PluginRuntimeService } from './plugin-runtime.service';
 
 const CORE_PLUGIN_KEY = 'dsh-plugin-life-dashboard';
 
@@ -302,6 +303,7 @@ export class PluginsService implements OnModuleInit {
   constructor(
     @Inject(LOCAL_DATABASE) private readonly db: LocalDatabase,
     private readonly lifeLogService: LifeLogService,
+    private readonly pluginRuntime: PluginRuntimeService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -536,6 +538,10 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
           .update(lifePluginConfig)
           .set({ lifecycleStatus: 'active' })
           .where(eq(lifePluginConfig.pluginKey, pluginKey))
+          .then(() => {
+            // 激活后装载插件云函数（无 server.js 的插件自动跳过）
+            return this.pluginRuntime.load(pluginKey);
+          })
           .catch((err) => {
             this.logger.error(`Failed to activate plugin ${pluginKey}: ${String(err)}`);
           });
@@ -595,6 +601,8 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
       });
 
       this.logger.log(`Plugin uninstalled: ${pluginKey}`);
+      // 卸载后注销云函数（保留数据目录）
+      await this.pluginRuntime.unload(pluginKey);
       void this.lifeLogService.append({
         eventType: 'plugin_uninstalled',
         eventCategory: 'plugins',
@@ -644,6 +652,8 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
 
     this.logger.log(`Plugin suspended: ${pluginKey}`);
+    // 暂停：注销云函数（恢复时重新装载）
+    await this.pluginRuntime.unload(pluginKey);
     void this.lifeLogService.append({
       eventType: 'plugin_suspended',
       eventCategory: 'plugins',
@@ -678,6 +688,8 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
 
     this.logger.log(`Plugin resumed: ${pluginKey}`);
+    // 恢复：重新装载云函数
+    await this.pluginRuntime.load(pluginKey);
     void this.lifeLogService.append({
       eventType: 'plugin_resumed',
       eventCategory: 'plugins',
