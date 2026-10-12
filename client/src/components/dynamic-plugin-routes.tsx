@@ -9,6 +9,7 @@ import FinancePage from '@client/src/pages/FinancePage/FinancePage';
 import HealthPage from '@client/src/pages/HealthPage/HealthPage';
 import ReviewBoardPage from '@client/src/pages/ReviewBoardPage/ReviewBoardPage';
 import ChildTvAdminPage from '@client/src/pages/ChildTvAdminPage/ChildTvAdminPage';
+import DemoFnPage from '@client/src/pages/DemoFnPage/DemoFnPage';
 import PluginHost from '@client/src/pages/PluginHost/PluginHost';
 import { Loader2 } from 'lucide-react';
 
@@ -20,6 +21,7 @@ const pluginPageMap: Record<string, React.ComponentType> = {
   'dsh-plugin-health-fit': HealthPage,
   'dsh-plugin-review-board': ReviewBoardPage,
   'dsh-plugin-child-tv': ChildTvAdminPage,
+  'dsh-plugin-demo-fn': DemoFnPage,
 };
 
 export default function DynamicPluginRoutes() {
