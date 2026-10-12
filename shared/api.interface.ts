@@ -506,6 +506,14 @@ export interface DisabledPluginInfo {
   pluginName: string;
 }
 
+/** AI 回复附带的功能建议（前端据此动态渲染快捷操作按钮，不写死） */
+export interface SuggestedAction {
+  id: string;
+  label: string;
+  prompt: string;
+  icon?: string;
+}
+
 export interface AiChatResponse {
   reply: string;
   toolCalls?: ChatToolCall[];
@@ -513,6 +521,8 @@ export interface AiChatResponse {
   needsConfirmation?: boolean;
   missingParams?: string[];
   preflightChecks?: PreflightCheckStep[];
+  /** 本次回复后建议的快捷功能动作（已启用插件的暴露方法动态生成） */
+  suggestedActions?: SuggestedAction[];
   pendingMethod?: {
     id: string;
     name: string;

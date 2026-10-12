@@ -8,7 +8,7 @@ import ChatPanel from './ChatPanel';
 import SessionSidebar from './SessionSidebar';
 import type { ChatMessage, ChatToolCall, PreflightCheckStep } from './ChatPanel';
 import { detectPluginIntent } from './plugin-intent';
-import type { AiChatSession, AiChatSessionMessage } from '@shared/api.interface';
+import type { AiChatSession, AiChatSessionMessage, SuggestedAction } from '@shared/api.interface';
 import { showConfirm } from '@lark-apaas/client-toolkit';
 
 const PLUGIN_CHILD_KEY = 'dsh-plugin-child-resources';
@@ -24,9 +24,13 @@ const sessionMsgToChatMsg = (m: AiChatSessionMessage): ChatMessage => ({
   id: m.id,
   role: m.role,
   content: m.content,
-  toolCalls: m.toolCalls && m.toolCalls.length > 0 ? (m.toolCalls as ChatToolCall[]) : undefined,
+  // 防御：历史消息字段可能为 JSON 字符串或非法值，仅保留真正的数组，避免渲染报错
+  toolCalls:
+    Array.isArray(m.toolCalls) && m.toolCalls.length > 0
+      ? (m.toolCalls as ChatToolCall[])
+      : undefined,
   preflightChecks:
-    m.preflightChecks && m.preflightChecks.length > 0
+    Array.isArray(m.preflightChecks) && m.preflightChecks.length > 0
       ? (m.preflightChecks as PreflightCheckStep[])
       : undefined,
 });
@@ -40,7 +44,13 @@ const AiChat = () => {
   const [sessions, setSessions] = useState<AiChatSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [quickActions, setQuickActions] = useState<SuggestedAction[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 实时消息引用：初始化加载最近会话时避免覆盖事件唤起（life-os:ai-chat:send）已填充的对话
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   // AI 深度助手
   const [deepMode, setDeepMode] = useState(true);
   const [deepContext, setDeepContext] = useState<DeepDataSnapshot | null>(null);
@@ -114,6 +124,7 @@ const AiChat = () => {
   const loadSessionMessages = useCallback(async (sessionId: string) => {
     try {
       const res = await aiChatApi.getSessionMessages(sessionId);
+      setQuickActions([]); // 历史会话不附带快捷功能建议
       if (res.items.length > 0) {
         setMessages(res.items.map(sessionMsgToChatMsg));
       } else {
@@ -128,11 +139,40 @@ const AiChat = () => {
     }
   }, []);
 
+  // 打开助手：默认加载最近一条历史会话（无会话则显示欢迎语）
   useEffect(() => {
-    if (isOpen && sessions.length === 0 && !sessionsLoading) {
-      loadSessions();
-    }
-  }, [isOpen, sessions.length, sessionsLoading, loadSessions]);
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await aiChatApi.getSessions();
+        if (cancelled) return;
+        setSessions(res.items);
+        // 事件唤起（life-os:ai-chat:send）已填充对话时，不覆盖
+        if (messagesRef.current.length > 0) return;
+        if (res.items.length > 0) {
+          const latest = res.items[0];
+          setActiveSessionId(latest.id);
+          const msgs = await aiChatApi.getSessionMessages(latest.id);
+          if (cancelled || messagesRef.current.length > 0) return;
+          setMessages(
+            msgs.items.length > 0
+              ? msgs.items.map(sessionMsgToChatMsg)
+              : [{ id: 'welcome', role: 'assistant', content: WELCOME_CONTENT }],
+          );
+        } else {
+          setMessages([{ id: 'welcome', role: 'assistant', content: WELCOME_CONTENT }]);
+        }
+      } catch (err) {
+        logger.error('Failed to init chat sessions', { error: String(err) });
+      } finally {
+        if (!cancelled) setSessionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -144,6 +184,7 @@ const AiChat = () => {
   const handleNewSession = useCallback(() => {
     setActiveSessionId(null);
     setMessages([{ id: 'welcome', role: 'assistant', content: WELCOME_CONTENT }]);
+    setQuickActions([]);
     setShowSidebar(false);
     setInputValue('');
     textareaRef.current?.focus();
@@ -285,6 +326,11 @@ const AiChat = () => {
         ),
       );
 
+      // 助手返回的快捷功能（动态渲染，不写死）
+      if (Array.isArray(response.suggestedActions) && response.suggestedActions.length > 0) {
+        setQuickActions(response.suggestedActions);
+      }
+
       if (response.sessionId) {
         if (!activeSessionId) {
           setActiveSessionId(response.sessionId);
@@ -338,6 +384,10 @@ const AiChat = () => {
   const handleClose = () => {
     setIsOpen(false);
     setShowSidebar(false);
+    // 关闭即重置会话状态：下次打开默认加载最近一条历史会话
+    setMessages([]);
+    setActiveSessionId(null);
+    setQuickActions([]);
   };
 
   return (
@@ -383,6 +433,7 @@ const AiChat = () => {
             onAddMemory={handleAddMemory}
             onDeleteMemory={handleDeleteMemory}
             memorySaving={memorySaving}
+            quickActions={quickActions}
           />
         </div>
       )}

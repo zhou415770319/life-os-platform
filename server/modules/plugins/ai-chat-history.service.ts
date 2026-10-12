@@ -10,6 +10,17 @@ import type {
   PreflightCheckStep,
 } from '@shared/api.interface';
 
+/** 数据库 text 列中存储的 JSON 字符串 → 类型化数组（无效/空返回 undefined，防止前端按数组渲染报错） */
+function parseJsonField<T>(raw: unknown): T | undefined {
+  if (typeof raw !== 'string' || raw === '' || raw === '[]') return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? (parsed as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 @Injectable()
 export class AiChatHistoryService {
   constructor(
@@ -72,8 +83,8 @@ export class AiChatHistoryService {
       role: row.role as 'user' | 'assistant' | 'system',
       content: row.content,
       createdAt: row.createdAt.toISOString(),
-      toolCalls: (row.toolCalls as ChatToolCall[]) ?? undefined,
-      preflightChecks: (row.preflightChecks as PreflightCheckStep[]) ?? undefined,
+      toolCalls: parseJsonField<ChatToolCall[]>(row.toolCalls),
+      preflightChecks: parseJsonField<PreflightCheckStep[]>(row.preflightChecks),
     }));
   }
 

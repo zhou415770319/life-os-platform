@@ -10,6 +10,7 @@ import type {
   AiChatResponse,
   PluginMethod,
   PreflightCheckStep,
+  SuggestedAction,
   AiChatSession,
   AiChatSessionMessage,
   AiMemoryItem,
@@ -23,6 +24,27 @@ interface SimpleMessage {
 
 const TOOL_CALL_START = '<<<TOOL_CALL>>>';
 const TOOL_CALL_END = '<<<END>>>';
+
+/** 插件 Key → 中文名（用于快捷功能标签展示） */
+const PLUGIN_NAME_MAP: Record<string, string> = {
+  'dsh-plugin-child-resources': '儿童资料站',
+  'dsh-plugin-wechat-rpa': 'RPA 管理',
+  'dsh-plugin-time-blackhole': '时间黑洞',
+  'dsh-plugin-pomodoro': '番茄钟',
+  'dsh-plugin-review-board': '复盘面板',
+  'dsh-plugin-child-tv': '儿童定时播放',
+  'dsh-plugin-reading-notes': '读书笔记',
+};
+
+/** 方法名 → 快捷动作 prompt 示例（点击即可执行） */
+const METHOD_PROMPT_MAP: Record<string, string> = {
+  addResource: '在儿童资料站中添加一条新资料',
+  updateResource: '修改儿童资料站中的一条资料',
+  deleteResource: '删除儿童资料站中的一条资料',
+  addRecord: '在番茄钟中记录一次专注',
+  addWasteRecord: '在时间黑洞中记录一次浪费时间',
+  addNote: '在读书笔记中添加一条读书笔记',
+};
 
 interface ParsedToolCall {
   name: string;
@@ -72,6 +94,22 @@ export class AiChatService {
     if (rows.length === 0) return '';
     const lines = rows.map((m) => `- ${m.content}`).join('\n');
     return `## 关于用户的长期记忆\n以下是你在过往对话中记住的关于用户的重要信息，回答时请自然运用（不要提及"记忆"二字）：\n${lines}`;
+  }
+
+  /** 根据已启用插件的暴露方法动态生成快捷功能动作（前端据此渲染按钮，不写死） */
+  private buildSuggestedActions(methods: PluginMethod[]): SuggestedAction[] {
+    return methods
+      .filter((m) => !m.system)
+      .slice(0, 4)
+      .map((m) => {
+        const pluginLabel = PLUGIN_NAME_MAP[m.pluginKey] ?? m.pluginKey.replace(/^dsh-plugin-/, '');
+        const prompt = METHOD_PROMPT_MAP[m.name] ?? `帮我调用「${m.name}」方法（${pluginLabel}）`;
+        return {
+          id: `${m.pluginKey}.${m.name}`,
+          label: `${pluginLabel}·${(m.description || m.name).slice(0, 12)}`,
+          prompt,
+        };
+      });
   }
 
   /** 构建数据快照（供深度助手参考） */
@@ -156,6 +194,7 @@ export class AiChatService {
 
     const { items: enabledMethods } = await this.methodRegistry.getAvailableMethods();
     const allMethods = this.methodRegistry.getAllMethods();
+    const suggestedActions = this.buildSuggestedActions(enabledMethods);
     const basePrompt = this.buildSystemPrompt(allMethods, enabledMethods);
 
     // AI 深度助手：注入长期记忆 + 实时数据快照
@@ -173,6 +212,7 @@ export class AiChatService {
         reply: firstTurn,
         toolCalls: [],
         needsMoreInfo: false,
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({
@@ -213,6 +253,7 @@ export class AiChatService {
           pluginKey: preflight.method?.pluginKey || '',
           pluginName,
         },
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({
@@ -233,6 +274,7 @@ export class AiChatService {
         toolCalls: [],
         needsMoreInfo: false,
         preflightChecks: preflight.steps,
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({
@@ -267,6 +309,7 @@ export class AiChatService {
           params: method.params,
           providedArgs: toolCall.parameters,
         },
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({
@@ -299,6 +342,7 @@ export class AiChatService {
         toolCalls: pendingToolCalls,
         needsMoreInfo: false,
         needsConfirmation: true,
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({
@@ -340,6 +384,7 @@ export class AiChatService {
         toolCalls: successToolCalls,
         needsMoreInfo: false,
         preflightChecks: preflight.steps,
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({
@@ -377,6 +422,7 @@ export class AiChatService {
         toolCalls: errorToolCalls,
         needsMoreInfo: false,
         preflightChecks: preflight.steps,
+        suggestedActions,
         sessionId,
       };
       await this.historyService.saveMessage({

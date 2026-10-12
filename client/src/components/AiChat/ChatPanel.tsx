@@ -1,8 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { X, Sparkles, Plug, CheckCircle2, Send, Cog, CheckCircle, XCircle, ShieldCheck, ShieldAlert, Settings2, Menu, Brain, BarChart3, BookMarked, Trash2, Plus, Loader2 } from 'lucide-react';
+import { X, Sparkles, Plug, Send, Cog, CheckCircle, XCircle, ShieldCheck, ShieldAlert, Settings2, Menu, Brain, BarChart3, BookMarked, Trash2, Plus, Loader2 } from 'lucide-react';
 import { Button } from '@client/src/components/ui/button';
 import { Textarea } from '@client/src/components/ui/textarea';
 import type { DeepDataSnapshot, AiMemoryItem } from '@client/src/api/ai-chat';
+import type { SuggestedAction } from '@shared/api.interface';
 
 export interface ChatToolCall {
   id: string;
@@ -50,6 +51,8 @@ interface ChatPanelProps {
   onAddMemory: (content: string) => void;
   onDeleteMemory: (id: string) => void;
   memorySaving?: boolean;
+  /** 助手返回的快捷功能动作（动态渲染，不写死） */
+  quickActions?: SuggestedAction[];
 }
 
 const formatArgs = (args: Record<string, unknown>): string => {
@@ -79,6 +82,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   onAddMemory,
   onDeleteMemory,
   memorySaving,
+  quickActions,
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [activePanel, setActivePanel] = useState<'data' | 'memory' | null>(null);
@@ -382,28 +386,25 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 快捷指令 */}
+      {/* 快捷功能（动态：由助手返回的 suggestedActions 渲染，不写死） */}
       <div className="px-3 pt-1 pb-2 flex gap-2 flex-wrap">
-        <button
-          onClick={() => onInputChange('安装儿童资料站插件')}
-          className="text-xs px-2 py-1 rounded-md bg-slate-800/80 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/10 transition-colors flex items-center gap-1"
-        >
-          <Plug className="w-3 h-3" />
-          安装儿童资料站
-        </button>
-        <button
-          onClick={() => onInputChange('安装 RPA 创作中心插件')}
-          className="text-xs px-2 py-1 rounded-md bg-slate-800/80 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/10 transition-colors flex items-center gap-1"
-        >
-          <CheckCircle2 className="w-3 h-3" />
-          安装 RPA 插件
-        </button>
-        <button
-          onClick={() => onInputChange('在儿童资料站中添加一个 RAZ AA 级资料')}
-          className="text-xs px-2 py-1 rounded-md bg-slate-800/80 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/10 transition-colors"
-        >
-          添加 RAZ 资料
-        </button>
+        {quickActions && quickActions.length > 0 ? (
+          quickActions.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => onInputChange(a.prompt)}
+              className="text-xs px-2 py-1 rounded-md bg-slate-800/80 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/10 transition-colors flex items-center gap-1"
+              title={a.prompt}
+            >
+              <Plug className="w-3 h-3" />
+              {a.label}
+            </button>
+          ))
+        ) : (
+          <span className="text-xs text-zinc-600 px-1 py-1">
+            试试问我：分析一下我今天的效率
+          </span>
+        )}
       </div>
 
       {/* 输入区 */}
