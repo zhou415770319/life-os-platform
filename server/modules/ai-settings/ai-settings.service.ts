@@ -164,7 +164,8 @@ export class AiSettingsService {
     const added: AiModelDef[] = [];
     for (const modelId of ids) {
       if (!existing.has(modelId)) {
-        const def: AiModelDef = { id: modelId, name: modelId, enabled: true };
+        // 新拉取的模型默认关闭，由用户选择开启（避免自动启用陌生模型）
+        const def: AiModelDef = { id: modelId, name: modelId, enabled: false };
         existing.set(modelId, def);
         added.push(def);
       }
@@ -192,7 +193,7 @@ export class AiSettingsService {
       id: input.id,
       name: input.name || input.id,
       contextLength: input.contextLength,
-      enabled: input.enabled ?? true,
+      enabled: input.enabled ?? false,
     };
     list[idx] = {
       ...list[idx],

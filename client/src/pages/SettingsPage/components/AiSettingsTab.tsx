@@ -8,15 +8,18 @@ import {
   PlugZap,
   RefreshCw,
   Cpu,
-  CheckCircle2,
-  XCircle,
-  KeyRound,
-  Link2,
+  Save,
   Power,
   PowerOff,
-  Save,
   AlertTriangle,
   Info,
+  ChevronDown,
+  ChevronRight,
+  CheckSquare,
+  Square,
+  CheckCheck,
+  KeyRound,
+  Link2,
 } from 'lucide-react';
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
@@ -133,6 +136,13 @@ const AiSettingsTab = () => {
   const [addModelProviderId, setAddModelProviderId] = useState('');
   const [newModelId, setNewModelId] = useState('');
   const [newModelName, setNewModelName] = useState('');
+
+  // 平台折叠（默认展开）
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 模型多选（providerId -> Set<modelId>）
+  const [selectedModels, setSelectedModels] = useState<Record<string, Set<string>>>({});
+  // 批量开启中
+  const [bulkEnablingId, setBulkEnablingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -283,6 +293,69 @@ const AiSettingsTab = () => {
     }
   };
 
+  // ===== 模型多选 / 批量开启 =====
+
+  const toggleModelSelected = (providerId: string, modelId: string) => {
+    setSelectedModels((prev) => {
+      const next = new Map(Object.entries(prev));
+      const set = new Set(next.get(providerId) ?? []);
+      if (set.has(modelId)) set.delete(modelId);
+      else set.add(modelId);
+      if (set.size === 0) next.delete(providerId);
+      else next.set(providerId, set);
+      return Object.fromEntries(next);
+    });
+  };
+
+  const selectAllModels = (providerId: string) => {
+    const p = view?.providers.find((x) => x.id === providerId);
+    if (!p) return;
+    setSelectedModels((prev) => {
+      const next = new Map(Object.entries(prev));
+      next.set(providerId, new Set(p.models.map((m) => m.id)));
+      return Object.fromEntries(next);
+    });
+  };
+
+  const clearSelectedModels = (providerId: string) => {
+    setSelectedModels((prev) => {
+      const next = new Map(Object.entries(prev));
+      next.delete(providerId);
+      return Object.fromEntries(next);
+    });
+  };
+
+  const selectedCountOf = (providerId: string): number =>
+    selectedModels[providerId]?.size ?? 0;
+
+  const handleBulkEnable = async (providerId: string) => {
+    const ids = Array.from(selectedModels[providerId] ?? []);
+    if (ids.length === 0) {
+      toast.error('请先勾选要开启的模型');
+      return;
+    }
+    setBulkEnablingId(providerId);
+    let okCount = 0;
+    try {
+      for (const modelId of ids) {
+        const res = await aiSettingsApi.updateModel(providerId, modelId, { enabled: true });
+        if (res.ok) okCount += 1;
+      }
+      toast.success(`已开启 ${okCount}/${ids.length} 个模型`);
+      setSelectedModels((prev) => {
+        const next = new Map(Object.entries(prev));
+        next.delete(providerId);
+        return Object.fromEntries(next);
+      });
+      await load();
+    } catch (err) {
+      logger.error('Bulk enable models failed', { error: String(err) });
+      toast.error('批量开启失败');
+    } finally {
+      setBulkEnablingId(null);
+    }
+  };
+
   // ===== 手动添加模型 =====
 
   const openAddModel = (providerId: string) => {
@@ -401,6 +474,21 @@ const AiSettingsTab = () => {
             <CardContent className="p-4 space-y-4">
               {/* 平台头 */}
               <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 text-zinc-400 hover:text-white hover:bg-white/5"
+                  onClick={() =>
+                    setCollapsed((prev) => ({ ...prev, [p.id]: !prev[p.id] }))
+                  }
+                  title={collapsed[p.id] ? '展开模型列表' : '折叠模型列表'}
+                >
+                  {collapsed[p.id] ? (
+                    <ChevronRight className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                </Button>
                 <div
                   className={`w-9 h-9 rounded-lg flex items-center justify-center ${
                     p.enabled
@@ -499,57 +587,118 @@ const AiSettingsTab = () => {
 
               {/* 模型列表 */}
               <div className="pl-12">
-                {p.models.length === 0 ? (
-                  <p className="text-xs text-zinc-600">
-                    暂无模型。点击「获取模型」自动拉取平台模型列表，或手动添加。
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {p.models.map((m) => (
-                      <div
-                        key={m.id}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
-                          m.enabled
-                            ? 'bg-indigo-500/[0.06] border-indigo-500/20'
-                            : 'bg-zinc-500/[0.05] border-white/5 opacity-60'
-                        }`}
-                      >
-                        <Cpu className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm text-zinc-200 truncate">{m.name || m.id}</div>
-                          <div className="text-xs text-zinc-600 truncate">{m.id}</div>
-                        </div>
-                        {m.contextLength ? (
-                          <span className="text-[11px] text-zinc-600 whitespace-nowrap">
-                            {m.contextLength >= 1000 ? `${(m.contextLength / 1000).toFixed(0)}k` : m.contextLength}
+                {!collapsed[p.id] && (
+                  <>
+                    {p.models.length === 0 ? (
+                      <p className="text-xs text-zinc-600">
+                        暂无模型。点击「获取模型」自动拉取平台模型列表，或手动添加。
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {/* 批量操作行 */}
+                        <div className="flex flex-wrap items-center gap-2 pb-1">
+                          <span className="text-xs text-zinc-500">
+                            已勾选 {selectedCountOf(p.id)} 个
                           </span>
-                        ) : null}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2 text-zinc-500 hover:text-rose-300"
-                          onClick={() => handleDeleteModel(p.id, m.id)}
-                          title="删除模型"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                        <Switch
-                          checked={m.enabled}
-                          onCheckedChange={(v) => handleToggleModel(p.id, m.id, v)}
-                        />
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
+                            onClick={() => selectAllModels(p.id)}
+                          >
+                            <CheckSquare className="w-3.5 h-3.5 mr-1" />
+                            全选
+                          </Button>
+                          {selectedCountOf(p.id) > 0 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs text-zinc-400 hover:text-white"
+                              onClick={() => clearSelectedModels(p.id)}
+                            >
+                              <Square className="w-3.5 h-3.5 mr-1" />
+                              清空
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            disabled={bulkEnablingId === p.id || selectedCountOf(p.id) === 0}
+                            onClick={() => handleBulkEnable(p.id)}
+                            className="h-6 px-2.5 text-xs bg-gradient-to-r from-emerald-500 to-teal-600 border-0 text-white hover:opacity-90"
+                          >
+                            {bulkEnablingId === p.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                            ) : (
+                              <CheckCheck className="w-3.5 h-3.5 mr-1" />
+                            )}
+                            开启选中
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {p.models.map((m) => {
+                            const selected = selectedModels[p.id]?.has(m.id) ?? false;
+                            return (
+                              <div
+                                key={m.id}
+                                className={`flex items-center gap-2 rounded-lg border px-3 py-2 cursor-pointer select-none ${
+                                  selected
+                                    ? 'bg-emerald-500/[0.08] border-emerald-500/30'
+                                    : m.enabled
+                                      ? 'bg-indigo-500/[0.06] border-indigo-500/20'
+                                      : 'bg-zinc-500/[0.05] border-white/5 opacity-60'
+                                }`}
+                                onClick={() => toggleModelSelected(p.id, m.id)}
+                                title={selected ? '取消勾选' : '勾选（可批量开启）'}
+                              >
+                                {selected ? (
+                                  <CheckSquare className="w-4 h-4 text-emerald-400 shrink-0" />
+                                ) : (
+                                  <Square className="w-4 h-4 text-zinc-500 shrink-0" />
+                                )}
+                                <Cpu className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm text-zinc-200 truncate">{m.name || m.id}</div>
+                                  <div className="text-xs text-zinc-600 truncate">{m.id}</div>
+                                </div>
+                                {m.contextLength ? (
+                                  <span className="text-[11px] text-zinc-600 whitespace-nowrap">
+                                    {m.contextLength >= 1000 ? `${(m.contextLength / 1000).toFixed(0)}k` : m.contextLength}
+                                  </span>
+                                ) : null}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-zinc-500 hover:text-rose-300"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteModel(p.id, m.id);
+                                  }}
+                                  title="删除模型"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </Button>
+                                <Switch
+                                  checked={m.enabled}
+                                  onCheckedChange={(v) => handleToggleModel(p.id, m.id, v)}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 border-white/10 text-zinc-400 hover:text-white"
+                      onClick={() => openAddModel(p.id)}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      手动添加模型
+                    </Button>
+                  </>
                 )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2 border-white/10 text-zinc-400 hover:text-white"
-                  onClick={() => openAddModel(p.id)}
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  手动添加模型
-                </Button>
               </div>
             </CardContent>
           </Card>
