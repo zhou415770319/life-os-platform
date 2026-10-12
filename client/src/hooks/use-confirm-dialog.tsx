@@ -39,7 +39,11 @@ export function useConfirmDialog() {
     return new Promise((resolve) => {
       setState({
         open: true,
-        ...options,
+        title: options.title ?? '',
+        description: options.description ?? '',
+        confirmText: options.confirmText ?? '确认',
+        cancelText: options.cancelText ?? '取消',
+        variant: options.variant ?? 'default',
         onConfirm: () => {
           setState((prev) => ({ ...prev, open: false }));
           resolve(true);
