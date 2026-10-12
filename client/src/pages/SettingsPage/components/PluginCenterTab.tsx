@@ -24,6 +24,7 @@ import { showConfirm } from '@lark-apaas/client-toolkit';
 import PluginDetailDialog from './PluginDetailDialog';
 import MechanismTab from '../../PluginCenterPage/MechanismTab';
 import DevelopmentTab from '../../PluginCenterPage/DevelopmentTab';
+import Disclaimer from '@client/src/components/ui/disclaimer';
 
 const categoryLabels: Record<string, string> = {
   core: '核心模块',
@@ -300,6 +301,9 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
           <DevelopmentTab />
         </TabsContent>
       </Tabs>
+
+      {/* 免责声明 */}
+      <Disclaimer />
 
       {detailPlugin && (
         <PluginDetailDialog

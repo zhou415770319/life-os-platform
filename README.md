@@ -4,7 +4,7 @@
 
 ## 项目简介
 
-Life-OS 是一个高度模块化的人生管理系统，基于 DSH (Dynamic Service Host) 插件规范构建。系统主壳提供人生管理看板，通过 AI 对话实现业务插件的热插拔，覆盖**目标管理、微习惯、认知笔记、番茄专注、时间黑洞、复盘面板、GTD 任务、数据洞察、自动复盘**等个人成长核心场景，并支持儿童资料站、RPA 管理等业务插件扩展。
+Life-OS 是一个高度模块化的人生管理系统，基于 DSH (Dynamic Service Host) 插件规范构建。系统主壳提供人生管理看板，通过 AI 对话实现业务插件的热插拔，覆盖**目标管理、微习惯、认知笔记、番茄专注、时间黑洞、复盘面板、GTD 任务、数据洞察、自动复盘**等个人成长核心场景，并支持儿童资料站、儿童定时播放、读书笔记、RPA 管理等业务插件扩展。
 
 ### 核心亮点
 
@@ -25,7 +25,9 @@ Life-OS 是一个高度模块化的人生管理系统，基于 DSH (Dynamic Serv
 
 * **📝 自动复盘**：每日 / 每周定时自动生成复盘，AI 个性化总结（失败自动降级模板）
 
-* **🔌 插件热插拔**：儿童资料站、番茄钟、时间黑洞、复盘面板、RPA 管理等插件无缝缝合到主界面
+* **🔌 插件热插拔**：儿童资料站、番茄钟、时间黑洞、复盘面板、RPA 管理等插件无缝缝合到主界面；插件可携带 **云函数（server.js）**，装载时自动注册后端方法与 AI 调用能力，卸载即注销
+
+* **☁️ 插件云函数（server.js）**：插件包内可声明后端方法（增删改查 / 统计 / 危险操作等），启用插件时宿主动态加载注册进方法注册表，卸载 / 暂停即注销；方法自动暴露给 AI 助手，聊天即可调用（缺参自动追问）
 
 * **📋 复盘面板**：Markdown 式每日 / 每周 / 每月三级复盘，粘贴自动转 Markdown，任务勾选即记完成时间，每日归档到周、周日归档到月，支持生成只读 / 可编辑分享链接与 ShareOne 公网发布包
 
@@ -65,14 +67,17 @@ life-os-platform/
 │       │   ├── GoalsPage/       # 愿景与目标
 │       │   ├── HabitsPage/      # 微习惯（今日打卡/微习惯管理）
 │       │   ├── NotesPage/       # 认知笔记（闪念/原则库/快速链接）
-│       │   ├── TasksPage/       # GTD 任务管理
-│       │   ├── PomodoroPage/    # 番茄钟记录
+│       │   ├── TasksPage/       # GTD 任务管理（插件，默认不加载）
+│       │   ├── PomodoroPage/    # 番茄钟记录（插件，默认不加载）
 │       │   ├── TimeBlackholePage/ # 时间黑洞
 │       │   ├── InsightsPage/    # 数据洞察（可视化中心）
 │       │   ├── ReviewPage/      # 自动复盘
 │       │   ├── ChildResourcesPage/ # 儿童资料站（插件）
 │       │   ├── RpaManagerPage/  # RPA 管理（插件）
 │       │   ├── ReviewBoardPage/ # 复盘面板（插件）
+│       │   ├── ChildTvAdminPage/ # 儿童定时播放（插件）
+│       │   ├── ReadingNotesPage/ # 读书笔记（插件）
+│       │   ├── DemoFnPage/      # 云函数示例插件（插件）
 │       │   ├── SettingsPage/    # 系统设置（插件管理/数据管理/AI 配置）
 │       │   ├── PluginCenterPage/# 插件中心
 │       │   └── DataManagerPage/ # 数据备份与导入
@@ -95,7 +100,9 @@ life-os-platform/
 │       ├── child-resources/     # 儿童资料站（插件）
 │       ├── rpa-manager/         # RPA 管理（插件）
 │       ├── review-board/        # 复盘面板（插件：三级面板/归档/分享/发布）
-│       ├── plugins/             # 插件管理 + AI 助手（ai-chat）
+│       ├── child-tv/            # 儿童定时播放（插件）
+│       ├── reading-notes/       # 读书笔记（插件）
+│       ├── plugins/             # 插件管理 + AI 助手（ai-chat）+ 云函数运行时（plugin-runtime）
 │       ├── life-log/            # 人生日志
 │       └── data-manager/        # 数据备份导入导出
 │
@@ -200,7 +207,7 @@ npm run dev:client    # 前端 (Vite)，端口取 .env 的 CLIENT_PORT
 
 
 
-* 前端页面：`http://localhost:<CLIENT_PORT>/client/index.html`
+* 前端页面：`http://localhost:<CLIENT_PORT>/`（Vite root 已指向 `client/`，根路径直达首页）
 
 * 后端 API：`http://localhost:<SERVER_PORT>/api`
 
@@ -409,17 +416,20 @@ AI 助手支持两种配置方式：
 
 ### 内置插件清单
 
+> **默认加载状态**：⭐ 为默认启用（随系统启动自动加载）；其余默认**不加载**，需在系统设置 → 插件管理中手动启用 / 安装。
 
-
-| 插件       | 键名                           | 说明                                            | 可分析         |
-| -------- | ---------------------------- | --------------------------------------------- | ----------- |
-| 人生管理看板   | `dsh-plugin-life-dashboard`  | 核心插件，目标 / 习惯 / 认知三大模块                         | -           |
-| 儿童资料站    | `dsh-plugin-child-resources` | 儿童启蒙资料库（RAZ / 廖彩杏 / 牛津树）                      | ✅ 资料数量      |
-| 番茄钟记录    | `dsh-plugin-pomodoro`        | 专注计时与统计                                       | ✅ 专注时长 / 次数 |
-| 时间黑洞     | `dsh-plugin-time-blackhole`  | 浪费时间记录                                        | ✅ 浪费时间分钟数   |
-| RPA 管理   | `dsh-plugin-rpa-manager`     | 本地文件 / Excel 读写编辑                             | ✅ 管理文件数     |
-| 复盘面板     | `dsh-plugin-review-board`    | Markdown 每日 / 每周 / 每月复盘，归档 / 分享 / ShareOne 发布 | -           |
-| 任务管理 GTD | `dsh-plugin-tasks-gtd`       | GTD 任务管理                                      | -           |
+| 插件       | 键名                           | 说明                                            | 默认加载   | 可分析         |
+| -------- | ---------------------------- | --------------------------------------------- | ------- | ----------- |
+| 人生管理看板   | `dsh-plugin-life-dashboard`  | 核心插件，目标 / 习惯 / 认知三大模块                         | ⭐ 默认   | -           |
+| 时间黑洞     | `dsh-plugin-time-blackhole`  | 浪费时间记录（发呆 / 刷短视频 / 八卦闲聊）                     | ⭐ 默认   | ✅ 浪费时间分钟数   |
+| RPA 管理   | `dsh-plugin-rpa-manager`     | 本地文件 / Excel 读写编辑                             | ⭐ 默认   | ✅ 管理文件数     |
+| 儿童资料站    | `dsh-plugin-child-resources` | 儿童启蒙资料库（RAZ / 廖彩杏 / 牛津树）                      | 手动启用   | ✅ 资料数量      |
+| 复盘面板     | `dsh-plugin-review-board`    | Markdown 每日 / 每周 / 每月复盘，归档 / 分享 / ShareOne 发布 | 手动启用   | -           |
+| 儿童定时播放   | `dsh-plugin-child-tv`        | 定时播放 / 家长远程控制 / 锁定电脑                          | 手动启用   | ✅ 播放次数      |
+| 任务管理 GTD | `dsh-plugin-tasks-gtd`       | GTD 任务管理（收集箱 / 四象限 / 项目分解）                   | 默认不加载  | -           |
+| 番茄钟记录    | `dsh-plugin-pomodoro`        | 专注计时与统计                                       | 默认不加载  | ✅ 专注时长 / 次数 |
+| 读书笔记     | `reading-notes`              | 阅读管理 / 读书笔记                                   | 手动启用   | -           |
+| 云函数示例    | `dsh-plugin-demo-fn`         | 云函数（server.js）机制演示：记录增删改查 / 统计 / 危险操作        | 手动启用   | -           |
 
 ### 参与数据分析（重要规则）
 
@@ -449,6 +459,26 @@ AI 助手支持两种配置方式：
 
 3. **参数是否齐全** → 缺参数先向用户确认再执行
 
+### 插件云函数（server.js）
+
+插件包内可携带 `server.js` 声明后端方法，实现"插件自带后端能力、无需修改主工程"：
+
+
+
+* **目录结构**：`user-data/plugins/<插件key>/server.js`（manifest.json 声明 `"serverEntry": "server.js"`）
+
+* **声明方式**：`module.exports = { onLoad, onUnload, methods: [{ name, description, params, dangerous, handler(args, ctx) }] }`
+
+* **生命周期**：启用 / 安装插件时自动加载注册进方法注册表；卸载 / 暂停即注销（不重启、不侵入主工程）
+
+* **注入能力（ctx）**：`dataDir / joinData / readJson / writeJson / logger / http（15s）/ userId / pluginKey`，插件只能读写自己的 `data/` 目录
+
+* **危险方法**：`dangerous: true` 的方法（如清空数据）AI 调用时需用户确认
+
+* **示例**：`user-data/plugins/dsh-plugin-demo-fn/`（7 个方法，含增删改查 / 统计 / 回显 / 危险清空）
+
+详细约定见 `docs/插件配置说明.md` 第五章节。
+
 ## 数据存储与备份
 
 
@@ -473,6 +503,12 @@ AI 助手支持两种配置方式：
 | AI 提示 "服务暂时不可用"                                | 检查 AI 配置（API Key / Base URL / 模型），在设置页点「测试连接」                             |
 | 历史会话看不到                                        | 聊天窗左上角菜单打开会话列表，点击会话回显；会话数据保存在 `user-data/life-ai-chat-*`                  |
 | 插件数据没出现在数据洞察                                   | 需要先在插件详情中开启「参与数据分析」开关                                                     |
+| 根路径 / 404 / 页面白屏                                   | 需用带 MiaoDa 环境变量的方式启动前端（`npm run dev:local` 或手动补齐 `MIAODA_APP_TYPE=3` / `MIAODA_LOCAL_DEV=1`），Vite root 已指向 `client/` |
+| 换电脑后插件丢失                                        | 插件包位于 `user-data/plugins/`（git 忽略），迁移时整体拷贝该目录；或从插件市场重新安装                                |
+
+## 免责声明
+
+Life-OS 为个人本地化工具，所有数据默认仅存储在本地（`user-data/` 目录），请定期备份。插件可能来自第三方开发者或在线市场，安装前请确认来源与权限；涉及本地文件读写、定时播放、远程控制等系统级操作的插件请谨慎授权。AI 助手生成内容仅供参考，不构成任何专业建议。全站页脚与插件中心 / 插件市场页面均展示该声明。
 
 ## 插件扩展开发
 

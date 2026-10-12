@@ -24,6 +24,7 @@ import { getPluginIcon } from '@client/src/utils/plugin-icons';
 import { marketApi } from '@client/src/api';
 import { toast } from 'sonner';
 import PluginDetailDialog from './PluginDetailDialog';
+import Disclaimer from '@client/src/components/ui/disclaimer';
 
 const categoryLabels: Record<string, string> = {
   core: '核心模块',
@@ -386,6 +387,9 @@ const PluginMarketTab: React.FC<PluginMarketTabProps> = ({
           )}
         </CardContent>
       </Card>
+
+      {/* 免责声明 */}
+      <Disclaimer />
 
       {detailPlugin && (
         <PluginDetailDialog

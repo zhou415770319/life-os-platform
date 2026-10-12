@@ -16,6 +16,7 @@ import { useState, useEffect } from 'react';
 import { usePlugins } from '@client/src/hooks/use-plugins';
 import { getPluginIcon } from '@client/src/utils/plugin-icons';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
+import Disclaimer from '@client/src/components/ui/disclaimer';
 
 const coreNavItems = [
   { path: '/', label: '人生看板', icon: LayoutDashboard, key: 'dashboard' },
@@ -204,6 +205,10 @@ const Layout = () => {
         </div>
         <div className="min-h-full">
           <Outlet />
+        </div>
+        {/* 全站免责声明（页脚） */}
+        <div className="border-t border-white/5 px-6 py-4">
+          <Disclaimer compact />
         </div>
       </main>
     </div>
