@@ -335,7 +335,7 @@ export default function ChildTvAdminPage() {
     enabled: !!token,
   });
 
-  // ===== 打开所在文件夹 =====
+  // ===== 打开所在文件夹（支持快捷键 Ctrl+Shift+O） =====
   const [openingDir, setOpeningDir] = useState(false);
   const handleOpenDataDir = useCallback(async () => {
     setOpeningDir(true);
@@ -352,6 +352,18 @@ export default function ChildTvAdminPage() {
       setOpeningDir(false);
     }
   }, []);
+
+  // 键盘快捷键：Ctrl+Shift+O 打开插件所在文件夹
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        void handleOpenDataDir();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleOpenDataDir]);
 
   // ===== 登录 =====
   const loginMutation = useMutation({
@@ -670,6 +682,9 @@ export default function ChildTvAdminPage() {
             >
               <FolderOpen className="h-3.5 w-3.5" />
               {openingDir ? '打开中…' : '打开所在文件夹'}
+              <kbd className="ml-1 rounded border border-white/15 bg-white/5 px-1 text-[10px] leading-4 text-zinc-400">
+                Ctrl+Shift+O
+              </kbd>
             </button>
           </div>
           <div className="space-y-3 text-sm">

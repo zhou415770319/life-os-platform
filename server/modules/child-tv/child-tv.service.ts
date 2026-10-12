@@ -94,9 +94,12 @@ const SYNC_RECONNECT_MS = 3_000;
 @Injectable()
 export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('ChildTv');
-  /** 服务/数据文件统一放在插件自身目录下（server/modules/child-tv/data） */
-  private readonly dataDir = path.resolve(process.cwd(), 'server/modules/child-tv/data');
+  /** 服务/数据文件统一放在插件自身目录下（与线上市场安装的插件结构一致：user-data/plugins/<key>/） */
+  private readonly dataDir = path.resolve(process.cwd(), 'user-data', 'plugins', 'dsh-plugin-child-tv', 'data');
+  /** 更早版本：数据存放在 user-data/ 根目录 */
   private readonly legacyDataDir = path.resolve(process.cwd(), 'user-data');
+  /** 早期版本：数据存放在服务源码目录内 */
+  private readonly legacySrcDataDir = path.resolve(process.cwd(), 'server', 'modules', 'child-tv', 'data');
   private readonly schedulesStore = new JsonStore<ChildTvSchedule>('child-tv-schedules.json', this.dataDir);
   private readonly logsStore = new JsonStore<ChildTvLogEntry>('child-tv-log.json', this.dataDir);
   private readonly statsStore = new JsonStore<ChildTvStatsEntry>('child-tv-stats.json', this.dataDir);
@@ -143,7 +146,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     this.loadChildLocks();
   }
 
-  /** 将旧版本存放在 user-data/ 根目录的本插件文件迁移到插件目录下（文件已存在则不覆盖） */
+  /** 将历史版本的本插件服务文件迁移到插件目录下（文件已存在则不覆盖） */
   private migrateLegacyFiles(): void {
     const legacyFiles = [
       'child-tv-schedules.json',
@@ -153,16 +156,20 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       'child-tv-settings.json',
       'child-tv-secret.txt',
       'child-tv-playlist.m3u',
+      'child-tv-locks.json',
     ];
-    for (const name of legacyFiles) {
-      const src = path.join(this.legacyDataDir, name);
-      const dst = path.join(this.dataDir, name);
-      if (fs.existsSync(src) && !fs.existsSync(dst)) {
-        try {
-          fs.copyFileSync(src, dst);
-          this.logger.log(`已迁移 ${name} → ${this.dataDir}`);
-        } catch (e) {
-          this.logger.warn(`迁移 ${name} 失败: ${(e as Error).message}`);
+    // 迁移来源优先级：user-data/ 根目录（更早版本）→ server/modules/child-tv/data（早期版本）
+    for (const srcDir of [this.legacyDataDir, this.legacySrcDataDir]) {
+      for (const name of legacyFiles) {
+        const src = path.join(srcDir, name);
+        const dst = path.join(this.dataDir, name);
+        if (fs.existsSync(src) && !fs.existsSync(dst)) {
+          try {
+            fs.copyFileSync(src, dst);
+            this.logger.log(`已迁移 ${name} → ${this.dataDir}`);
+          } catch (e) {
+            this.logger.warn(`迁移 ${name} 失败: ${(e as Error).message}`);
+          }
         }
       }
     }

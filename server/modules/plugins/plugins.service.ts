@@ -432,7 +432,9 @@ module.exports = {
 
 ## 数据存储
 
-插件数据保存在本地 \`user-data/plugins-data/${seed.pluginKey}/\` 目录，
+${seed.pluginKey === 'dsh-plugin-child-tv'
+  ? '插件数据保存在插件自身目录下 \`user-data/plugins/dsh-plugin-child-tv/data/\`，控制台提供「打开所在文件夹」（快捷键 Ctrl+Shift+O）快捷定位。'
+  : '插件数据保存在本地 \`user-data/plugins-data/' + seed.pluginKey + '/\` 目录，'}
 遵循「本地文件存储优先，后期可切换线上数据库」的项目规则。
 
 ## 使用方式

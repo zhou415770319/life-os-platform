@@ -213,8 +213,8 @@ export default function DashboardPage() {
           <>
             <CoreCard
               icon={Target}
-              title="人生愿景与长期 OKR"
-              description="定义你今年的核心里程碑，保持航向清晰。"
+              title="愿景与目标"
+              description="设定人生愿景与长期目标，按分类与截止日期跟踪里程碑。"
               statusText={`${stats?.goals.active ?? 0} 个核心目标进行中`}
               badgeText={`共 ${stats?.goals.total ?? 0} 个目标`}
               gradientFrom="hsl(239, 84%, 67%)"
@@ -224,8 +224,8 @@ export default function DashboardPage() {
             />
             <CoreCard
               icon={Clock}
-              title="能量与时间管理"
-              description="管理每周高能时间段，记录习惯打卡与精力状态。"
+              title="微习惯"
+              description="管理每日 / 每周 / 每月微习惯，今日打卡并记录完成时间。"
               statusText="今日已打卡"
               badgeText={`${stats?.habits.todayCompleted ?? 0}/${stats?.habits.total ?? 0} 项`}
               gradientFrom="hsl(187, 92%, 60%)"
@@ -236,8 +236,8 @@ export default function DashboardPage() {
             />
             <CoreCard
               icon={Brain}
-              title="认知看板与闪念笔记"
-              description="随时捕捉灵感，沉淀个人数字资产与核心原则。"
+              title="认知看板与数字资产"
+              description="记录闪念笔记，沉淀核心原则库与高频快速链接。"
               statusText={`今日新增 ${stats?.notes.todayCount ?? 0} 条笔记`}
               badgeText={`共 ${stats?.notes.total ?? 0} 条`}
               gradientFrom="hsl(263, 83%, 66%)"
