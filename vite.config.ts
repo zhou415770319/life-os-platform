@@ -6,6 +6,8 @@ import { defineConfig } from '@lark-apaas/coding-preset-vite-react';
 // （SERVER_PORT 同时作为 dev 反代目标，/api 请求会转发到该端口）
 export default defineConfig(
   {
+    // index.html 位于 client/ 目录：显式指定 root，使根路径与 SPA 路由可正常访问
+    root: path.resolve(__dirname, 'client'),
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'client/src'),
