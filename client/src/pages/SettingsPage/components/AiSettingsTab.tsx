@@ -328,20 +328,31 @@ const AiSettingsTab = () => {
   const selectedCountOf = (providerId: string): number =>
     selectedModels[providerId]?.size ?? 0;
 
+  /** 选中项是否全部处于开启状态（全部开启 → 按钮变为「关闭选中」） */
+  const allSelectedEnabled = (providerId: string): boolean => {
+    const p = view?.providers.find((x) => x.id === providerId);
+    const ids = selectedModels[providerId] ?? new Set<string>();
+    if (!p || ids.size === 0) return false;
+    return p.models.filter((m) => ids.has(m.id)).every((m) => m.enabled);
+  };
+
   const handleBulkEnable = async (providerId: string) => {
     const ids = Array.from(selectedModels[providerId] ?? []);
     if (ids.length === 0) {
-      toast.error('请先勾选要开启的模型');
+      toast.error('请先勾选要操作的模型');
       return;
     }
+    const enable = !allSelectedEnabled(providerId); // 全部开启 → 关闭；否则 → 开启
     setBulkEnablingId(providerId);
     let okCount = 0;
     try {
       for (const modelId of ids) {
-        const res = await aiSettingsApi.updateModel(providerId, modelId, { enabled: true });
+        const res = await aiSettingsApi.updateModel(providerId, modelId, {
+          enabled: enable,
+        });
         if (res.ok) okCount += 1;
       }
-      toast.success(`已开启 ${okCount}/${ids.length} 个模型`);
+      toast.success(`${enable ? '已开启' : '已关闭'} ${okCount}/${ids.length} 个模型`);
       setSelectedModels((prev) => {
         const next = new Map(Object.entries(prev));
         next.delete(providerId);
@@ -349,8 +360,8 @@ const AiSettingsTab = () => {
       });
       await load();
     } catch (err) {
-      logger.error('Bulk enable models failed', { error: String(err) });
-      toast.error('批量开启失败');
+      logger.error('Bulk update models failed', { error: String(err) });
+      toast.error('批量操作失败');
     } finally {
       setBulkEnablingId(null);
     }
@@ -624,14 +635,25 @@ const AiSettingsTab = () => {
                             size="sm"
                             disabled={bulkEnablingId === p.id || selectedCountOf(p.id) === 0}
                             onClick={() => handleBulkEnable(p.id)}
-                            className="h-6 px-2.5 text-xs bg-gradient-to-r from-emerald-500 to-teal-600 border-0 text-white hover:opacity-90"
+                            className={`h-6 px-2.5 text-xs border-0 text-white hover:opacity-90 ${
+                              allSelectedEnabled(p.id)
+                                ? 'bg-gradient-to-r from-rose-500 to-orange-500'
+                                : 'bg-gradient-to-r from-emerald-500 to-teal-600'
+                            }`}
+                            title={
+                              allSelectedEnabled(p.id)
+                                ? '选中项全部处于开启状态，点击将全部关闭'
+                                : '选中项包含关闭状态的模型，点击将全部开启'
+                            }
                           >
                             {bulkEnablingId === p.id ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                            ) : allSelectedEnabled(p.id) ? (
+                              <PowerOff className="w-3.5 h-3.5 mr-1" />
                             ) : (
                               <CheckCheck className="w-3.5 h-3.5 mr-1" />
                             )}
-                            开启选中
+                            {allSelectedEnabled(p.id) ? '关闭选中' : '开启选中'}
                           </Button>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
