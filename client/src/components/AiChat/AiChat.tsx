@@ -51,6 +51,9 @@ const AiChat = () => {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  // 当前生成中 assistant 消息 id 与取消控制器（用于「停止生成」）
+  const currentAssistantIdRef = useRef<string | null>(null);
+  const stopControllerRef = useRef<AbortController | null>(null);
   // AI 深度助手
   const [deepMode, setDeepMode] = useState(true);
   const [deepContext, setDeepContext] = useState<DeepDataSnapshot | null>(null);
@@ -250,6 +253,109 @@ const AiChat = () => {
     [findPluginId],
   );
 
+  /** 核心：请求 AI 回复并更新指定 assistant 消息（发送与重新生成共用） */
+  const requestAssistantReply = useCallback(
+    async (
+      history: { role: 'user' | 'assistant'; content: string }[],
+      assistantId: string,
+    ) => {
+      setIsLoading(true);
+      currentAssistantIdRef.current = assistantId;
+      const controller = new AbortController();
+      stopControllerRef.current = controller;
+      try {
+        const response = await aiChatApi.chat(
+          {
+            messages: history,
+            sessionId: activeSessionId ?? undefined,
+            deepMode,
+          },
+          controller.signal,
+        );
+
+        const toolCalls: ChatToolCall[] = response.toolCalls
+          ? response.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: tc.type,
+              function: tc.function,
+              status: tc.status,
+              result: tc.result,
+              errorMessage: tc.errorMessage,
+            }))
+          : [];
+
+        const preflightChecks: PreflightCheckStep[] | undefined = response.preflightChecks;
+
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: response.reply,
+                  toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+                  preflightChecks:
+                    preflightChecks && preflightChecks.length > 0 ? preflightChecks : undefined,
+                }
+              : m,
+          ),
+        );
+
+        // 助手返回的快捷功能（动态渲染，不写死）
+        if (Array.isArray(response.suggestedActions) && response.suggestedActions.length > 0) {
+          setQuickActions(response.suggestedActions);
+        }
+
+        if (response.sessionId) {
+          if (!activeSessionId) {
+            setActiveSessionId(response.sessionId);
+            loadSessions();
+          } else {
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.id === response.sessionId
+                  ? { ...s, updatedAt: new Date().toISOString() }
+                  : s,
+              ),
+            );
+          }
+        }
+
+        if (toolCalls.some((tc) => tc.status === 'success')) {
+          window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
+        }
+      } catch (err) {
+        // 用户主动停止生成：保留已标记的「已停止」内容，不当作错误
+        const isCanceled =
+          (err as { code?: string })?.code === 'ERR_CANCELED' ||
+          (err as { name?: string })?.name === 'CanceledError' ||
+          (err as { message?: string })?.message?.includes('canceled');
+        if (isCanceled) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content || '⏹ 已停止生成。可点击消息上的「重新生成」继续。' }
+                : m,
+            ),
+          );
+          return;
+        }
+        logger.error('AI chat error', { error: String(err) });
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: '⚠️ 抱歉，AI 服务暂时不可用，请稍后再试。' }
+              : m,
+          ),
+        );
+        toast.error('AI 对话失败');
+      } finally {
+        setIsLoading(false);
+        stopControllerRef.current = null;
+      }
+    },
+    [activeSessionId, loadSessions, deepMode],
+  );
+
   const sendMessage = useCallback(async (rawText: string) => {
     const text = rawText.trim();
     if (!text || isLoading) return;
@@ -292,77 +398,75 @@ const AiChat = () => {
     const assistantId = `a-${Date.now()}`;
     setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '' }]);
 
-    try {
-      const response = await aiChatApi.chat({
-        messages: [...historyMessages, { role: 'user', content: text }],
-        sessionId: activeSessionId ?? undefined,
-        deepMode,
-      });
+    await requestAssistantReply(
+      [...historyMessages, { role: 'user', content: text }],
+      assistantId,
+    );
+  }, [isLoading, messages, togglePlugin, requestAssistantReply]);
 
-      const toolCalls: ChatToolCall[] = response.toolCalls
-        ? response.toolCalls.map((tc) => ({
-            id: tc.id,
-            type: tc.type,
-            function: tc.function,
-            status: tc.status,
-            result: tc.result,
-            errorMessage: tc.errorMessage,
-          }))
-        : [];
-
-      const preflightChecks: PreflightCheckStep[] | undefined = response.preflightChecks;
-
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: response.reply,
-                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-                preflightChecks:
-                  preflightChecks && preflightChecks.length > 0 ? preflightChecks : undefined,
-              }
-            : m,
-        ),
-      );
-
-      // 助手返回的快捷功能（动态渲染，不写死）
-      if (Array.isArray(response.suggestedActions) && response.suggestedActions.length > 0) {
-        setQuickActions(response.suggestedActions);
+  /** 停止当前生成中的回复 */
+  const handleStop = useCallback(() => {
+    const controller = stopControllerRef.current;
+    if (controller) {
+      controller.abort();
+    } else {
+      // 无进行中请求时兜底：将生成中的空消息标记为已停止
+      const id = currentAssistantIdRef.current;
+      if (id) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === id && !m.content
+              ? { ...m, content: '⏹ 已停止生成。可点击消息上的「重新生成」继续。' }
+              : m,
+          ),
+        );
       }
-
-      if (response.sessionId) {
-        if (!activeSessionId) {
-          setActiveSessionId(response.sessionId);
-          loadSessions();
-        } else {
-          setSessions((prev) =>
-            prev.map((s) =>
-              s.id === response.sessionId
-                ? { ...s, updatedAt: new Date().toISOString() }
-                : s,
-            ),
-          );
-        }
-      }
-
-      if (toolCalls.some((tc) => tc.status === 'success')) {
-        window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
-      }
-    } catch (err) {
-      logger.error('AI chat error', { error: String(err) });
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: '⚠️ 抱歉，AI 服务暂时不可用，请稍后再试。' }
-            : m,
-        ),
-      );
-      toast.error('AI 对话失败');
-    } finally {
       setIsLoading(false);
     }
-  }, [isLoading, messages, togglePlugin, activeSessionId, loadSessions, deepMode]);
+  }, []);
+
+  /** 重新生成指定 assistant 消息（仅无工具调用的消息，避免重复执行插件操作） */
+  const handleRegenerate = useCallback(
+    async (assistantId: string) => {
+      if (isLoading) return;
+      const idx = messages.findIndex((m) => m.id === assistantId);
+      if (idx <= 0) return;
+      const userMsg = messages[idx - 1];
+      if (userMsg.role !== 'user') return;
+
+      const history = messages
+        .slice(0, idx - 1)
+        .filter((m) => m.role !== 'system')
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }));
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: '', toolCalls: undefined, preflightChecks: undefined }
+            : m,
+        ),
+      );
+      await requestAssistantReply(
+        [...history, { role: 'user', content: userMsg.content }],
+        assistantId,
+      );
+    },
+    [isLoading, messages, requestAssistantReply],
+  );
+
+  /** 复制消息内容 */
+  const handleCopyMessage = useCallback(async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success('已复制到剪贴板');
+    } catch (err) {
+      logger.error('Copy message failed', { error: String(err) });
+      toast.error('复制失败');
+    }
+  }, []);
 
   const handleSend = useCallback(() => {
     sendMessage(inputValue);
@@ -421,6 +525,9 @@ const AiChat = () => {
             isLoading={isLoading}
             onInputChange={setInputValue}
             onSend={handleSend}
+            onStop={handleStop}
+            onRegenerate={handleRegenerate}
+            onCopyMessage={handleCopyMessage}
             onClose={handleClose}
             textareaRef={textareaRef}
             onToggleSidebar={() => setShowSidebar((v) => !v)}

@@ -29,11 +29,15 @@ export async function getAvailableMethods(): Promise<ListResponse<PluginMethod>>
   return response.data;
 }
 
-export async function chat(body: AiChatRequest): Promise<AiChatResponse> {
+export async function chat(
+  body: AiChatRequest,
+  signal?: AbortSignal,
+): Promise<AiChatResponse> {
   const response = await axiosForBackend({
     url: '/api/ai-chat/chat',
     method: 'POST',
     data: body,
+    signal,
   });
   return response.data;
 }
