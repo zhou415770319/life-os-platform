@@ -17,6 +17,7 @@ process.chdir(path.resolve(__dirname, '..'));
 
 const serverPort = process.env.SERVER_PORT || '3000';
 const clientPort = process.env.CLIENT_PORT || '5173';
+const clientHost = process.env.CLIENT_HOST || 'localhost';
 
 const commonEnv = {
   ...process.env,
@@ -32,7 +33,7 @@ const server = spawn('npx', ['nest', 'start', '--watch'], {
   stdio: 'inherit',
 });
 
-const client = spawn('npx', ['vite', '--config', 'vite.config.ts', '--port', clientPort, '--strictPort'], {
+const client = spawn('npx', ['vite', '--config', 'vite.config.ts', '--port', clientPort, '--strictPort', '--host', clientHost], {
   env: commonEnv,
   shell: true,
   stdio: 'inherit',
@@ -57,6 +58,6 @@ process.on('SIGTERM', () => shutdown(0));
 console.log('========================================');
 console.log('  Life-OS 本地开发模式已启动');
 console.log(`  后端 API:  http://localhost:${serverPort}/api`);
-console.log(`  前端页面:  http://localhost:${clientPort}/client/index.html`);
-console.log(`  （端口可在 .env 中修改 SERVER_PORT / CLIENT_PORT）`);
+console.log(`  前端页面:  http://${clientHost}:${clientPort}/client/index.html`);
+console.log(`  （端口可在 .env 中修改 SERVER_PORT / CLIENT_PORT，绑定地址用 CLIENT_HOST）`);
 console.log('========================================');

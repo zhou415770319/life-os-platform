@@ -21,6 +21,9 @@ export default defineConfig(
       include: ['react', 'react-dom', 'react-dom/client'],
     },
     server: {
+      // host 从 .env 读取：CLIENT_HOST=127.0.0.1 时内网穿透工具可直接配置 127.0.0.1:CLIENT_PORT
+      // （默认 localhost；如需局域网访问可设为 0.0.0.0）
+      host: loadEnv('development', process.cwd(), '').CLIENT_HOST || 'localhost',
       port: Number(loadEnv('development', process.cwd(), '').CLIENT_PORT || 5173),
       strictPort: true,
     },
