@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -26,6 +27,7 @@ import {
   Copy,
   Link2,
   KeyRound,
+  Eye,
 } from 'lucide-react';
 import { childTvApi } from '@client/src/api';
 import type {
@@ -203,6 +205,7 @@ function BrowseDialog({
 }
 
 export default function ChildTvAdminPage() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [token, setToken] = useState<string | null>(childTvApi.getChildTvToken());
   const [loginName, setLoginName] = useState('admin');
@@ -565,6 +568,12 @@ export default function ChildTvAdminPage() {
               </Button>
               <p className="text-center text-xs text-zinc-500">默认家长账号 admin / 123456</p>
             </div>
+            <Link
+              to="/child-tv"
+              className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5 text-sm text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-200"
+            >
+              <Eye className="h-4 w-4" /> 进入儿童观看页
+            </Link>
           </Card>
         </div>
       </div>
@@ -592,6 +601,12 @@ export default function ChildTvAdminPage() {
             >
               <LogOut className="mr-1 h-3.5 w-3.5" /> 退出并重新登录
             </Button>
+            <Link
+              to="/child-tv"
+              className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5 text-sm text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-200"
+            >
+              <Eye className="h-4 w-4" /> 进入儿童观看页
+            </Link>
           </Card>
         </div>
       </div>
@@ -618,6 +633,9 @@ export default function ChildTvAdminPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/child-tv')} title="切换到儿童观看页（只读，无控制操作）">
+            <Eye className="mr-1 h-3.5 w-3.5" /> 儿童观看
+          </Button>
           <Button variant="ghost" size="sm" onClick={refresh}>
             <RefreshCw className="mr-1 h-3.5 w-3.5" /> 刷新
           </Button>

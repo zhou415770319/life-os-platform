@@ -1,4 +1,5 @@
 ﻿import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -13,6 +14,7 @@ import {
   WifiOff,
   X,
   LogOut,
+  KeyRound,
 } from 'lucide-react';
 import { childTvApi } from '@client/src/api';
 
@@ -228,9 +230,9 @@ export default function ChildTvWatchPage() {
         </span>
       </div>
 
-      {/* 受控模式连接状态（右上角，低对比） */}
+      {/* 受控模式连接状态（左上角，低对比） */}
       {remoteActive && (
-        <div className="absolute top-8 right-20 flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-400">
+        <div className="absolute top-8 left-8 flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-zinc-400">
           {locked ? (
             <>
               <Lock className="h-3 w-3 text-rose-400" />
@@ -245,10 +247,19 @@ export default function ChildTvWatchPage() {
         </div>
       )}
 
+      {/* 家长控制台入口（右上角，低对比） */}
+      <Link
+        to="/child-tv-admin"
+        title="家长控制台（登录后管理时段、账号与锁定）"
+        className="absolute top-8 right-20 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-500 transition hover:bg-white/[0.08] hover:text-zinc-300"
+      >
+        <KeyRound className="h-4 w-4" />
+      </Link>
+
       {/* 设置入口（右上角，低对比） */}
       <button
         onClick={() => setConfigOpen(true)}
-        title="设置 / 登录"
+        title="设置 / 儿童登录"
         className="absolute top-8 right-8 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-500 transition hover:bg-white/[0.08] hover:text-zinc-300"
       >
         <SettingsIcon className="h-4 w-4" />
@@ -444,6 +455,15 @@ export default function ChildTvWatchPage() {
                 启用后：家长在控制台对绑定儿童账号下发「锁定」时，本机 watch 状态会显示家长锁定中（锁键由服务端本机执行，请确认本服务与家长端可互通）。
               </p>
             </div>
+
+            {/* 家长控制台入口 */}
+            <Link
+              to="/child-tv-admin"
+              className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-zinc-300 transition hover:bg-white/[0.06] hover:text-zinc-100"
+            >
+              <KeyRound className="h-4 w-4 text-indigo-400" />
+              家长控制台 · 登录后管理时段、账号与远程锁定
+            </Link>
           </div>
         </div>
       )}
