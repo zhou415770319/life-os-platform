@@ -3,7 +3,7 @@ import { X, Sparkles, Plug, Send, Square, Copy, RefreshCw, Cog, CheckCircle, XCi
 import { Button } from '@client/src/components/ui/button';
 import { Textarea } from '@client/src/components/ui/textarea';
 import type { DeepDataSnapshot, AiMemoryItem } from '@client/src/api/ai-chat';
-import type { SuggestedAction } from '@shared/api.interface';
+import type { SuggestedAction, PluginConfig } from '@shared/api.interface';
 
 export interface ChatToolCall {
   id: string;
@@ -56,6 +56,8 @@ interface ChatPanelProps {
   memorySaving?: boolean;
   /** 助手返回的快捷功能动作（动态渲染，不写死） */
   quickActions?: SuggestedAction[];
+  /** 已启用插件（用于输入 @ 时弹出选择器） */
+  mentionPlugins?: PluginConfig[];
 }
 
 const formatArgs = (args: Record<string, unknown>): string => {
@@ -89,18 +91,62 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   onDeleteMemory,
   memorySaving,
   quickActions,
+  mentionPlugins,
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [activePanel, setActivePanel] = useState<'data' | 'memory' | null>(null);
   const [memoryInput, setMemoryInput] = useState('');
+  // @插件名 选择器状态
+  const [showMention, setShowMention] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+
+  /** 检测输入中是否正在输入 @（光标前最后一个 token 以 @ 开头） */
+  const detectMention = (ta: HTMLTextAreaElement) => {
+    const pos = ta.selectionStart ?? inputValue.length;
+    const before = ta.value.slice(0, pos);
+    const m = before.match(/@([\u4e00-\u9fa5A-Za-z0-9_-]*)$/);
+    setShowMention(!!m);
+    setMentionQuery(m ? m[1] : '');
+  };
+
+  /** 选中插件：在光标处插入 @插件名 */
+  const handlePickPlugin = (name: string) => {
+    const ta = textareaRef?.current;
+    const pos = ta?.selectionStart ?? inputValue.length;
+    const before = inputValue.slice(0, pos);
+    const after = inputValue.slice(pos);
+    const stripped = before.replace(/@([\u4e00-\u9fa5A-Za-z0-9_-]*)$/, '');
+    const next = `${stripped}@${name} ${after}`;
+    onInputChange(next);
+    setShowMention(false);
+    requestAnimationFrame(() => {
+      if (ta) {
+        ta.focus();
+        const caret = stripped.length + name.length + 2;
+        ta.selectionStart = ta.selectionEnd = caret;
+      }
+    });
+  };
+
+  const mentionList = (mentionPlugins ?? []).filter(
+    (p) =>
+      !mentionQuery ||
+      p.name?.toLowerCase().includes(mentionQuery.toLowerCase()) ||
+      p.pluginKey.toLowerCase().includes(mentionQuery.toLowerCase()),
+  );
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape' && showMention) {
+      setShowMention(false);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      setShowMention(false);
       onSend();
     }
   };
@@ -437,14 +483,37 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
 
       {/* 输入区 */}
-      <div className="p-3 border-t border-white/5">
+      <div className="p-3 border-t border-white/5 relative">
+        {/* @插件名 选择器 */}
+        {showMention && (
+          <div className="absolute bottom-full left-3 right-3 mb-1 max-h-44 overflow-y-auto rounded-xl border border-white/10 bg-slate-800/95 backdrop-blur-xl shadow-xl z-20">
+            <div className="px-3 py-1.5 text-[11px] text-zinc-500 border-b border-white/5">
+              {mentionList.length > 0 ? '选择要操作的插件（@指定后仅调用该插件方法）' : '没有匹配的插件'}
+            </div>
+            {mentionList.map((p) => (
+              <button
+                key={p.pluginKey}
+                onClick={() => handlePickPlugin(p.name || p.pluginKey)}
+                className="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors flex items-center gap-2"
+              >
+                <Plug className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-zinc-200 truncate">{p.name || p.pluginKey}</div>
+                  <div className="text-[11px] text-zinc-600 truncate">{p.description || p.pluginKey}</div>
+                </div>
+                <span className="text-[10px] text-zinc-600 shrink-0">{p.pluginKey}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <Textarea
             ref={textareaRef}
             value={inputValue}
             onChange={(e) => onInputChange(e.target.value)}
+            onInput={(e) => detectMention(e.currentTarget)}
             onKeyDown={handleKeyDown}
-            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+            placeholder="输入消息... 输入 @ 可指定插件 (Enter 发送, Shift+Enter 换行)"
             rows={2}
             className="resize-none text-sm bg-slate-800/80 border-white/10 focus:border-indigo-500/50"
           />

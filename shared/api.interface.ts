@@ -485,6 +485,8 @@ export interface AiChatRequest {
   sessionId?: string;
   /** AI 深度助手模式：开启后自动注入你的实时数据（打卡/专注/浪费时间/目标/任务），可做深度分析与建议 */
   deepMode?: boolean;
+  /** @插件名 显式指定目标插件：本次对话仅允许调用该插件暴露的方法（自然语言兜底时不传） */
+  targetPluginKey?: string;
 }
 
 /** AI 长期记忆条目 */

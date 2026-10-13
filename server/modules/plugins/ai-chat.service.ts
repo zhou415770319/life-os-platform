@@ -194,8 +194,25 @@ export class AiChatService {
 
     const { items: enabledMethods } = await this.methodRegistry.getAvailableMethods();
     const allMethods = this.methodRegistry.getAllMethods();
-    const suggestedActions = this.buildSuggestedActions(enabledMethods);
-    const basePrompt = this.buildSystemPrompt(allMethods, enabledMethods);
+
+    // @插件名：显式指定目标插件 → 仅注入该插件的方法，消除同名方法歧义
+    const targetPluginKey = dto.targetPluginKey?.trim();
+    let targetMethods: PluginMethod[] = [];
+    if (targetPluginKey) {
+      targetMethods = allMethods.filter((m) => m.pluginKey === targetPluginKey);
+      if (targetMethods.length === 0) {
+        // 插件不存在：自然语言兜底，忽略指定
+        this.logger.warn(`targetPluginKey not found, fallback to all methods: ${targetPluginKey}`);
+      }
+    }
+
+    const scopedEnabledMethods = targetMethods.length > 0
+      ? enabledMethods.filter((m) => m.pluginKey === targetPluginKey)
+      : enabledMethods;
+    const suggestedActions = this.buildSuggestedActions(scopedEnabledMethods);
+    const basePrompt = this.buildSystemPrompt(allMethods, enabledMethods, {
+      targetPluginKey: targetMethods.length > 0 ? targetPluginKey : undefined,
+    });
 
     // AI 深度助手：注入长期记忆 + 实时数据快照
     const memoryBlock = this.buildMemoryBlock();
@@ -472,11 +489,17 @@ export class AiChatService {
     return this.historyService.deleteSession(sessionId, userId);
   }
 
-  private buildSystemPrompt(allMethods: PluginMethod[], enabledMethods: PluginMethod[]): string {
+  private buildSystemPrompt(
+    allMethods: PluginMethod[],
+    enabledMethods: PluginMethod[],
+    opts?: { targetPluginKey?: string },
+  ): string {
     const enabledIds = new Set(enabledMethods.map((m) => m.id));
+    const targetPluginKey = opts?.targetPluginKey;
 
     const enabledJson = allMethods
       .filter((m) => enabledIds.has(m.id))
+      .filter((m) => (targetPluginKey ? m.pluginKey === targetPluginKey : true))
       .map((m) => ({
         name: m.id,
         description: m.description,
@@ -500,6 +523,7 @@ export class AiChatService {
     const disabledMethods = allMethods.filter((m) => !enabledIds.has(m.id));
     const disabledByPlugin = new Map<string, { pluginName: string; methods: string[] }>();
     for (const m of disabledMethods) {
+      if (targetPluginKey && m.pluginKey !== targetPluginKey) continue;
       const entry = disabledByPlugin.get(m.pluginKey);
       if (entry) {
         entry.methods.push(m.id);
@@ -522,6 +546,14 @@ export class AiChatService {
 ${lines.join('\n')}
 `;
     }
+
+    const targetScopeHint = targetPluginKey
+      ? `
+## 本次对话的目标插件（重要）
+用户通过 @插件名 明确指定本次只操作「${this.getPluginDisplayName(targetPluginKey)}」插件（插件键: ${targetPluginKey}）。
+**你必须只调用该插件暴露的方法，禁止调用任何其他插件的方法。** 如果用户的请求不属于该插件的能力范围，请用自然语言说明，不要尝试调用其他插件。
+`
+      : '';
 
     return `你是 Life-OS 平台的 AI 助手，名叫「人生系统助手」。你的任务是帮助用户通过工具调用的方式操作各种插件功能，并基于用户的真实生活数据（习惯打卡、番茄专注、浪费时间、目标进度、任务）提供深度分析与建议。
 
@@ -556,6 +588,7 @@ ${lines.join('\n')}
 
 ${JSON.stringify(enabledJson, null, 2)}
 ${disabledSection}
+${targetScopeHint}
 ## 工具调用规则
 1. 当用户的请求是**数据操作**（添加/修改/删除/查询业务内容）时，使用工具调用标记。
 2. 当用户的请求是**插件管理**（安装/启用/卸载插件本身）时，不要使用工具调用标记，直接文字回复。

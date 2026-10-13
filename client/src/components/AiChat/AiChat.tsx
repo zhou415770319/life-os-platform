@@ -8,7 +8,7 @@ import ChatPanel from './ChatPanel';
 import SessionSidebar from './SessionSidebar';
 import type { ChatMessage, ChatToolCall, PreflightCheckStep } from './ChatPanel';
 import { detectPluginIntent } from './plugin-intent';
-import type { AiChatSession, AiChatSessionMessage, SuggestedAction } from '@shared/api.interface';
+import type { AiChatSession, AiChatSessionMessage, SuggestedAction, PluginConfig } from '@shared/api.interface';
 import { showConfirm } from '@lark-apaas/client-toolkit';
 
 const PLUGIN_CHILD_KEY = 'dsh-plugin-child-resources';
@@ -59,6 +59,35 @@ const AiChat = () => {
   const [deepContext, setDeepContext] = useState<DeepDataSnapshot | null>(null);
   const [memories, setMemories] = useState<AiMemoryItem[]>([]);
   const [memorySaving, setMemorySaving] = useState(false);
+  // @插件名：已启用插件列表（用于 @ 选择器）
+  const [mentionPlugins, setMentionPlugins] = useState<PluginConfig[]>([]);
+
+  const loadPlugins = useCallback(async () => {
+    try {
+      const data = await pluginsApi.getPlugins();
+      setMentionPlugins(data.items.filter((p) => p.enabled));
+    } catch (err) {
+      logger.error('Failed to load plugins for mention', { error: String(err) });
+    }
+  }, []);
+
+  /** 从输入文本解析 @插件名 → targetPluginKey（找不到则自然语言兜底） */
+  const parseMention = useCallback(
+    (text: string): string | undefined => {
+      const m = text.match(/@([\u4e00-\u9fa5A-Za-z0-9_-]+)/);
+      if (!m) return undefined;
+      const token = m[1];
+      const found = mentionPlugins.find(
+        (p) =>
+          p.name === token ||
+          p.pluginKey === token ||
+          (p.name && p.name.includes(token)) ||
+          p.pluginKey.includes(token),
+      );
+      return found?.pluginKey;
+    },
+    [mentionPlugins],
+  );
 
   const loadDeepContext = useCallback(async () => {
     try {
@@ -181,8 +210,9 @@ const AiChat = () => {
     if (isOpen) {
       loadDeepContext();
       loadMemories();
+      loadPlugins();
     }
-  }, [isOpen, loadDeepContext, loadMemories]);
+  }, [isOpen, loadDeepContext, loadMemories, loadPlugins]);
 
   const handleNewSession = useCallback(() => {
     setActiveSessionId(null);
@@ -258,6 +288,7 @@ const AiChat = () => {
     async (
       history: { role: 'user' | 'assistant'; content: string }[],
       assistantId: string,
+      targetPluginKey?: string,
     ) => {
       setIsLoading(true);
       currentAssistantIdRef.current = assistantId;
@@ -269,6 +300,7 @@ const AiChat = () => {
             messages: history,
             sessionId: activeSessionId ?? undefined,
             deepMode,
+            targetPluginKey,
           },
           controller.signal,
         );
@@ -398,11 +430,13 @@ const AiChat = () => {
     const assistantId = `a-${Date.now()}`;
     setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '' }]);
 
+    const targetPluginKey = parseMention(text);
     await requestAssistantReply(
       [...historyMessages, { role: 'user', content: text }],
       assistantId,
+      targetPluginKey,
     );
-  }, [isLoading, messages, togglePlugin, requestAssistantReply]);
+  }, [isLoading, messages, togglePlugin, requestAssistantReply, parseMention]);
 
   /** 停止当前生成中的回复 */
   const handleStop = useCallback(() => {
@@ -541,6 +575,7 @@ const AiChat = () => {
             onDeleteMemory={handleDeleteMemory}
             memorySaving={memorySaving}
             quickActions={quickActions}
+            mentionPlugins={mentionPlugins}
           />
         </div>
       )}
