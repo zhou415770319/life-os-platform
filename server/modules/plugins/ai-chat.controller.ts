@@ -4,10 +4,12 @@
   Body,
   Get,
   Req,
+  Res,
   Param,
   Patch,
   Delete,
 } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { NeedLogin } from '../../platform-local/need-login';
 import { AiChatService } from './ai-chat.service';
 import type {
@@ -72,11 +74,23 @@ export class AiChatController {
 
   @Post('chat')
   async chat(
-    @Req() req: { userContext: { userId: string } },
+    @Req() req: { userContext: { userId: string } } & Request,
+    @Res() res: Response,
     @Body() body: AiChatRequest,
-  ): Promise<AiChatResponse> {
+  ): Promise<void> {
     const { userId } = req.userContext;
-    return this.aiChatService.chat(body, userId);
+
+    // 前端停止生成（abort 请求）时，中断后端 AI 调用，历史保存「已停止生成」而非完整回复
+    const abortController = new AbortController();
+    const onAbort = () => abortController.abort();
+    req.on('aborted', onAbort);
+    res.on('close', () => {
+      if (!res.writableEnded) onAbort();
+      req.off('aborted', onAbort);
+    });
+
+    const result = await this.aiChatService.chat(body, userId, abortController.signal);
+    res.json(result);
   }
 
   @Get('sessions/:id')

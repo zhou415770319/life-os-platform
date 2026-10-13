@@ -13,6 +13,8 @@ export interface TextGenerateOptions {
   temperature?: number;
   /** 覆盖最大 token */
   maxTokens?: number;
+  /** 取消信号：调用方（如 AI 聊天）可中断底层模型请求 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -97,6 +99,7 @@ export class LocalCapabilityService {
         temperature: opts?.temperature ?? 0.7,
         ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}),
       }),
+      signal: opts?.signal,
     });
 
     if (response.status === 401) {

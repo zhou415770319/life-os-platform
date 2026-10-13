@@ -25,6 +25,14 @@ interface SimpleMessage {
 const TOOL_CALL_START = '<<<TOOL_CALL>>>';
 const TOOL_CALL_END = '<<<END>>>';
 
+/** 用户主动停止生成时抛出的取消信号错误 */
+class AiAbortError extends Error {
+  constructor() {
+    super('AI 生成已取消');
+    this.name = 'AiAbortError';
+  }
+}
+
 /** 插件 Key → 中文名（用于快捷功能标签展示） */
 const PLUGIN_NAME_MAP: Record<string, string> = {
   'dsh-plugin-child-resources': '儿童资料站',
@@ -177,7 +185,11 @@ export class AiChatService {
     }
   }
 
-  async chat(dto: AiChatRequest, userId: string): Promise<AiChatResponse> {
+  async chat(
+    dto: AiChatRequest,
+    userId: string,
+    signal?: AbortSignal,
+  ): Promise<AiChatResponse> {
     const lastUserMessage = dto.messages[dto.messages.length - 1]?.content ?? '';
     const sessionId = await this.historyService.ensureSession(
       dto.sessionId,
@@ -221,11 +233,20 @@ export class AiChatService {
 
     const userQuestion = this.buildUserQuestion(dto.messages);
 
-    const firstTurn = await this.callAiTextGenerate(
-      systemPrompt,
-      userQuestion,
-      dto.deepMode ? 'deep' : 'chat',
-    );
+    let firstTurn: string;
+    try {
+      firstTurn = await this.callAiTextGenerate(
+        systemPrompt,
+        userQuestion,
+        dto.deepMode ? 'deep' : 'chat',
+        signal,
+      );
+    } catch (error) {
+      if (signal?.aborted || error instanceof AiAbortError) {
+        return this.saveStoppedReply(sessionId, userId, suggestedActions);
+      }
+      throw error;
+    }
     const toolCall = this.parseToolCall(firstTurn);
 
     if (!toolCall) {
@@ -389,6 +410,7 @@ export class AiChatService {
         toolCall,
         result,
         true,
+        signal,
       );
 
       const successToolCalls = [
@@ -418,6 +440,9 @@ export class AiChatService {
       });
       return response;
     } catch (error) {
+      if (signal?.aborted || error instanceof AiAbortError) {
+        return this.saveStoppedReply(sessionId, userId, suggestedActions);
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Tool execution failed: ${toolCall.name}`, errorMessage);
 
@@ -427,6 +452,7 @@ export class AiChatService {
         toolCall,
         { error: errorMessage },
         false,
+        signal,
       );
 
       const errorToolCalls = [
@@ -664,21 +690,47 @@ ${TOOL_CALL_END}
     systemContext: string,
     userQuestion: string,
     usage: 'chat' | 'deep' | 'agent' | 'plugin' = 'chat',
+    signal?: AbortSignal,
   ): Promise<string> {
     try {
-      const result = (await this.capabilityService
-        .load('life_os_a2ui_ai_chat_1')
-        .call('textGenerate', {
-          system_context: systemContext,
-          user_question: userQuestion,
-          _model_usage: usage,
-        })) as { content?: string };
-
-      return result?.content || '';
+      return await this.capabilityService.generateText(
+        { system: systemContext, prompt: userQuestion },
+        { modelKey: usage, signal },
+      );
     } catch (error) {
+      if (signal?.aborted || error instanceof AiAbortError) {
+        throw new AiAbortError();
+      }
       this.logger.error('AI text generate failed', JSON.stringify(error));
       throw new Error('AI 服务调用失败');
     }
+  }
+
+  /** 用户停止生成：历史中保存「已停止生成」占位，保证回显与页面一致 */
+  private async saveStoppedReply(
+    sessionId: string,
+    userId: string,
+    suggestedActions: SuggestedAction[],
+  ): Promise<AiChatResponse> {
+    const reply = '⏹ 已停止生成。可点击消息上的「重新生成」继续。';
+    try {
+      await this.historyService.saveMessage({
+        sessionId,
+        role: 'assistant',
+        content: reply,
+        toolCalls: [],
+        userId,
+      });
+    } catch (saveError) {
+      this.logger.error('Failed to save stopped reply', String(saveError));
+    }
+    return {
+      reply,
+      toolCalls: [],
+      needsMoreInfo: false,
+      suggestedActions,
+      sessionId,
+    };
   }
 
   private parseToolCall(text: string): ParsedToolCall | null {
@@ -760,6 +812,7 @@ ${TOOL_CALL_END}
     toolCall: ParsedToolCall,
     result: unknown,
     success: boolean,
+    signal?: AbortSignal,
   ): Promise<string> {
     const resultStr = JSON.stringify(result, null, 2);
 
@@ -789,8 +842,11 @@ ${resultStr}
 ${history.map((m) => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`).join('\n')}
 
 请根据以上信息，用自然友好的中文向用户报告执行结果。成功就说明做了什么，失败就说明原因并给出建议。不要直接展示 JSON 数据。`;
-      return await this.callAiTextGenerate(ctx, q);
-    } catch {
+      return await this.callAiTextGenerate(ctx, q, 'chat', signal);
+    } catch (error) {
+      if (signal?.aborted || error instanceof AiAbortError) {
+        throw new AiAbortError();
+      }
       if (success) {
         return `✅ 操作成功！已执行「${toolCall.name}」。`;
       }

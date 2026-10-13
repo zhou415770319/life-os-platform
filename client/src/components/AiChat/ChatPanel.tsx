@@ -144,6 +144,16 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       setShowMention(false);
       return;
     }
+    // @ 选择器打开时：回车选中第一个匹配插件，避免误发送「@」
+    if (showMention && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (mentionList.length > 0) {
+        handlePickPlugin(mentionList[0].name || mentionList[0].pluginKey);
+      } else {
+        setShowMention(false);
+      }
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       setShowMention(false);

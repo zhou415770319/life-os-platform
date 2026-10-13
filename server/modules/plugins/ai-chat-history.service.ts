@@ -43,7 +43,7 @@ export class AiChatHistoryService {
       })
       .from(lifeAiChatSessions)
       .where(eq(lifeAiChatSessions.createdBy, userId))
-      .orderBy(desc(lifeAiChatSessions.createdAt))
+      .orderBy(desc(lifeAiChatSessions.updatedAt))
       .limit(50);
 
     const items: AiChatSession[] = rows.map((row) => ({
