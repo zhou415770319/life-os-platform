@@ -1,3 +1,6 @@
+// 非安全上下文补丁必须最先执行：内网穿透 http://域名 访问时 crypto.randomUUID 不存在
+import './polyfills';
+
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
