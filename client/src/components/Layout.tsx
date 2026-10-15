@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Target,
@@ -11,6 +11,7 @@ import {
   Sparkles,
   TrendingUp,
   RefreshCcw,
+  ChevronDown,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { usePlugins } from '@client/src/hooks/use-plugins';
@@ -34,9 +35,9 @@ const settingsNavItems = [
 
 const Layout = () => {
   const location = useLocation();
-  const navigate = useNavigate();
   const { enabledPlugins, error: pluginError } = usePlugins();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pluginsCollapsed, setPluginsCollapsed] = useState(true);
 
   useEffect(() => {
     setSidebarOpen(false);
@@ -49,6 +50,40 @@ const Layout = () => {
     key: p.pluginKey,
   }));
 
+  const renderNavItem = (item: {
+    path: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    key: string;
+    tab?: string;
+  }) => {
+    const Icon = item.icon;
+    const isActive =
+      item.path === '/' && !item.tab
+        ? location.pathname === '/'
+        : item.tab !== undefined
+          ? location.pathname === '/settings' &&
+            (item.tab === ''
+              ? !location.search.includes('tab=')
+              : location.search.includes(`tab=${item.tab}`))
+          : location.pathname.startsWith(item.path);
+    const to = item.tab ? `${item.path}?tab=${item.tab}` : item.path;
+    return (
+      <NavLink
+        key={item.key}
+        to={to}
+        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
+          isActive
+            ? 'bg-white/10 text-white border border-white/10'
+            : 'text-zinc-400 hover:text-white hover:bg-white/5 border border-transparent'
+        }`}
+      >
+        <Icon className="w-4 h-4" />
+        <span>{item.label}</span>
+      </NavLink>
+    );
+  };
+
   const NavSection = ({
     title,
     items,
@@ -60,33 +95,7 @@ const Layout = () => {
       <div className="px-3 py-2 text-xs font-medium text-zinc-500 uppercase tracking-wider">
         {title}
       </div>
-      {items.map((item) => {
-        const Icon = item.icon;
-        const isActive =
-          item.path === '/' && !item.tab
-            ? location.pathname === '/'
-            : item.tab !== undefined
-              ? location.pathname === '/settings' &&
-                (item.tab === ''
-                  ? !location.search.includes('tab=')
-                  : location.search.includes(`tab=${item.tab}`))
-              : location.pathname.startsWith(item.path);
-        const to = item.tab ? `${item.path}?tab=${item.tab}` : item.path;
-        return (
-          <NavLink
-            key={item.key}
-            to={to}
-            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 ${
-              isActive
-                ? 'bg-white/10 text-white border border-white/10'
-                : 'text-zinc-400 hover:text-white hover:bg-white/5 border border-transparent'
-            }`}
-          >
-            <Icon className="w-4 h-4" />
-            <span>{item.label}</span>
-          </NavLink>
-        );
-      })}
+      {items.map((item) => renderNavItem(item))}
     </>
   );
 
@@ -127,7 +136,28 @@ const Layout = () => {
 
         {pluginNavItems.length > 0 && (
           <div className="mt-4">
-            <NavSection title="已装载插件" items={pluginNavItems} />
+            <button
+              type="button"
+              onClick={() => setPluginsCollapsed((v) => !v)}
+              className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors"
+            >
+              <span>已装载插件</span>
+              <span className="flex items-center gap-1.5">
+                <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                  {pluginNavItems.length}
+                </span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                    pluginsCollapsed ? '-rotate-90' : ''
+                  }`}
+                />
+              </span>
+            </button>
+            {!pluginsCollapsed && (
+              <div className="space-y-1 mt-1">
+                {pluginNavItems.map((item) => renderNavItem(item))}
+              </div>
+            )}
           </div>
         )}
 
