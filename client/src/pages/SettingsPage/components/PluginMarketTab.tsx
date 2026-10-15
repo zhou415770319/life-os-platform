@@ -21,6 +21,7 @@ import {
 import { Button } from '@client/src/components/ui/button';
 import { Badge } from '@client/src/components/ui/badge';
 import { getPluginIcon } from '@client/src/utils/plugin-icons';
+import { extractApiError } from '@client/src/utils/api-error';
 import { marketApi } from '@client/src/api';
 import { toast } from 'sonner';
 import PluginDetailDialog from './PluginDetailDialog';
@@ -112,8 +113,8 @@ const PluginMarketTab: React.FC<PluginMarketTabProps> = ({
       await refreshMarket();
       onDataChanged?.();
       window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || (action === 'uninstall' ? '卸载失败' : '操作失败');
+    } catch (err) {
+      const msg = extractApiError(err, action === 'uninstall' ? '卸载失败' : '操作失败');
       toast.error(msg);
     } finally {
       setMarketBusyKey(null);

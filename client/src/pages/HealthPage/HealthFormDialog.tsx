@@ -21,6 +21,7 @@ import {
 import { Textarea } from '@client/src/components/ui/textarea';
 import type { HealthRecordType } from '@shared/api.interface';
 import { createHealthRecord } from '@client/src/api/health';
+import { extractApiError } from '@client/src/utils/api-error';
 import type { CreateHealthRecordDto } from '@client/src/api/health';
 
 const EXERCISE_TYPES = ['跑步', '力量训练', '瑜伽', '游泳', '骑行', '其他'];
@@ -90,8 +91,8 @@ export default function HealthFormDialog({
       onOpenChange(false);
       resetForm();
     },
-    onError: (err: Error) => {
-      toast.error('记录失败: ' + (err.message || '未知错误'));
+    onError: (err) => {
+      toast.error('记录失败: ' + extractApiError(err, '未知错误'));
     },
   });
 

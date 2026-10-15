@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { KeyRound, Lock, User, ShieldCheck, Sparkles } from 'lucide-react';
 import { authBootstrap, authLogin, authRegister } from '../../api/auth';
+import { extractApiError } from '../../utils/api-error';
 
 /**
  * 登录 / 注册页：
@@ -47,8 +48,8 @@ export default function LoginPage() {
         await authRegister(username, password, inviteCode.trim() || undefined);
       }
       navigate(redirect, { replace: true });
-    } catch (err: any) {
-      setError(err?.response?.data?.message || err?.message || '操作失败，请重试');
+    } catch (err) {
+      setError(extractApiError(err, '操作失败，请重试'));
     } finally {
       setLoading(false);
     }

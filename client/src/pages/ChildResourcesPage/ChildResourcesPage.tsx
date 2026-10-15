@@ -36,6 +36,7 @@ import {
   DialogDescription,
 } from '@client/src/components/ui/dialog';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
+import { extractApiError } from '@client/src/utils/api-error';
 import ResourceCard from './ResourceCard';
 import ResourceFormDialog from './ResourceFormDialog';
 import ResourceDetailDialog from './ResourceDetailDialog';
@@ -171,8 +172,8 @@ const ChildResourcesPage = () => {
       setDeleteOpen(false);
       setDeleteResource(null);
     },
-    onError: (err: Error) => {
-      toast.error('删除失败: ' + (err.message || '未知错误'));
+    onError: (err) => {
+      toast.error('删除失败: ' + extractApiError(err, '未知错误'));
     },
   });
 

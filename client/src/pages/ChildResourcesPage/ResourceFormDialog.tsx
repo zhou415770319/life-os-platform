@@ -11,6 +11,7 @@ import {
 } from '@client/src/components/ui/dialog';
 import { Input } from '@client/src/components/ui/input';
 import { Button } from '@client/src/components/ui/button';
+import { extractApiError } from '@client/src/utils/api-error';
 import {
   Select,
   SelectContent,
@@ -110,8 +111,8 @@ export default function ResourceFormDialog({
       queryClient.invalidateQueries({ queryKey: ['childResourceCategories'] });
       onOpenChange(false);
     },
-    onError: (err: Error) => {
-      toast.error('添加失败: ' + (err.message || '未知错误'));
+    onError: (err) => {
+      toast.error('添加失败: ' + extractApiError(err, '未知错误'));
     },
   });
 
@@ -129,8 +130,8 @@ export default function ResourceFormDialog({
       queryClient.invalidateQueries({ queryKey: ['childResourceCategories'] });
       onOpenChange(false);
     },
-    onError: (err: Error) => {
-      toast.error('更新失败: ' + (err.message || '未知错误'));
+    onError: (err) => {
+      toast.error('更新失败: ' + extractApiError(err, '未知错误'));
     },
   });
 

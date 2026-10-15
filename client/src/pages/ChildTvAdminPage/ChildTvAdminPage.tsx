@@ -33,6 +33,7 @@ import type {
   ChildTvScheduleInput,
 } from '@shared/api.interface';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
+import { extractApiError } from '@client/src/utils/api-error';
 import UsageDocModal from '@client/src/components/ui/UsageDocModal';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -141,9 +142,7 @@ function CollectionDialog({
       const r = await childTvApi.childTvResolveUrl(u);
       setResolveResult(r);
     } catch (e) {
-      const msg =
-        (e as { response?: { data?: { message?: string } } }).response?.data?.message ?? '解析失败';
-      toast.error(typeof msg === 'string' ? msg : '解析失败');
+      toast.error(extractApiError(e, '解析失败'));
     } finally {
       setResolving(false);
     }
@@ -503,9 +502,7 @@ function FilePickerDialog({
 
   if (!open) return null;
 
-  const errMsg =
-    (error as { response?: { data?: { message?: string } } } | null)?.response?.data?.message ??
-    (error as Error | null)?.message;
+  const errMsg = extractApiError(error, '加载失败');
 
   return (
     <div
@@ -776,10 +773,8 @@ export default function ChildTvAdminPage() {
       queryClient.invalidateQueries({ queryKey: ['child-tv-schedules'] });
     },
     onError: (e) => {
-      const msg =
-        (e as { response?: { data?: { message?: string } } }).response?.data?.message ??
-        '保存失败';
-      toast.error(typeof msg === 'string' ? msg : '保存失败');
+      const msg = extractApiError(e, '保存失败');
+      toast.error(msg);
     },
   });
 
@@ -800,10 +795,7 @@ export default function ChildTvAdminPage() {
       queryClient.invalidateQueries({ queryKey: ['child-tv-schedules'] });
     },
     onError: (e) => {
-      const msg =
-        (e as { response?: { data?: { message?: string } } }).response?.data?.message ??
-        '状态更新失败';
-      toast.error(typeof msg === 'string' ? msg : '状态更新失败');
+      toast.error(extractApiError(e, '状态更新失败'));
     },
   });
 
@@ -847,10 +839,8 @@ export default function ChildTvAdminPage() {
       queryClient.invalidateQueries({ queryKey: ['child-tv-schedules'] });
     },
     onError: (e) => {
-      const msg =
-        (e as { response?: { data?: { message?: string } } }).response?.data?.message ??
-        '保存失败';
-      toast.error(typeof msg === 'string' ? msg : '保存失败');
+      const msg = extractApiError(e, '保存失败');
+      toast.error(msg);
     },
   });
 
@@ -868,10 +858,7 @@ export default function ChildTvAdminPage() {
       queryClient.invalidateQueries({ queryKey: ['child-tv-schedules'] });
     },
     onError: (e) => {
-      const msg =
-        (e as { response?: { data?: { message?: string } } }).response?.data?.message ??
-        '删除失败';
-      toast.error(typeof msg === 'string' ? msg : '删除失败');
+      toast.error(extractApiError(e, '删除失败'));
     },
   });
 
@@ -886,10 +873,7 @@ export default function ChildTvAdminPage() {
       refresh();
     },
     onError: (e) => {
-      const msg =
-        (e as { response?: { data?: { message?: string } } }).response?.data?.message ??
-        '播放失败';
-      toast.error(typeof msg === 'string' ? msg : '播放失败');
+      toast.error(extractApiError(e, '播放失败'));
     },
   });
 

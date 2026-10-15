@@ -38,6 +38,7 @@ import {
   AlertDialogTitle,
 } from '@client/src/components/ui/alert-dialog';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
+import { extractApiError } from '@client/src/utils/api-error';
 import QuadrantMatrix from './QuadrantMatrix';
 import TaskFormDialog, { EMPTY_TASK_FORM } from './TaskFormDialog';
 import type { TaskFormState } from './TaskFormDialog';
@@ -158,8 +159,8 @@ const TasksPage = () => {
       refreshAll();
       setFormOpen(false);
     },
-    onError: (err: Error) =>
-      toast.error('创建失败: ' + (err.message || '未知错误')),
+    onError: (err) =>
+      toast.error('创建失败: ' + extractApiError(err, '未知错误')),
   });
 
   const updateMutation = useMutation({
@@ -170,8 +171,8 @@ const TasksPage = () => {
       refreshAll();
       setFormOpen(false);
     },
-    onError: (err: Error) =>
-      toast.error('更新失败: ' + (err.message || '未知错误')),
+    onError: (err) =>
+      toast.error('更新失败: ' + extractApiError(err, '未知错误')),
   });
 
   const deleteMutation = useMutation({
@@ -182,16 +183,16 @@ const TasksPage = () => {
       setDeleteOpen(false);
       setDeleteTaskData(null);
     },
-    onError: (err: Error) =>
-      toast.error('删除失败: ' + (err.message || '未知错误')),
+    onError: (err) =>
+      toast.error('删除失败: ' + extractApiError(err, '未知错误')),
   });
 
   const completeMutation = useMutation({
     mutationFn: ({ id, done }: { id: string; done: boolean }) =>
       updateTask(id, { status: done ? 'done' : 'in_progress' }),
     onSuccess: () => refreshAll(),
-    onError: (err: Error) =>
-      toast.error('操作失败: ' + (err.message || '未知错误')),
+    onError: (err) =>
+      toast.error('操作失败: ' + extractApiError(err, '未知错误')),
   });
 
   const handleSearch = (val: string) => {

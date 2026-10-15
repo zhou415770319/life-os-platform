@@ -4,6 +4,7 @@ import { Settings, Puzzle, Store, ScrollText, Database, KeyRound, UserCircle2, L
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { toast } from 'sonner';
 import { pluginsApi, authApi } from '@client/src/api';
+import { extractApiError } from '@client/src/utils/api-error';
 import type { AvailablePlugin, InstalledPlugin } from '@shared/api.interface';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@client/src/components/ui/tabs';
 import { useConfirmDialog } from '@client/src/hooks/use-confirm-dialog';
@@ -83,8 +84,8 @@ const SettingsPage = () => {
       toast.success(`已安装「${plugin.name}」`);
       await refreshData();
       window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '安装失败';
+    } catch (err) {
+      const msg = extractApiError(err, '安装失败');
       logger.error('Install plugin failed', { error: String(err), pluginKey: plugin.pluginKey });
       toast.error(msg);
     } finally {
@@ -108,8 +109,8 @@ const SettingsPage = () => {
       toast.success(`已卸载「${plugin.name}」`);
       await refreshData();
       window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '卸载失败';
+    } catch (err) {
+      const msg = extractApiError(err, '卸载失败');
       logger.error('Uninstall plugin failed', { error: String(err), pluginKey: plugin.pluginKey });
       toast.error(msg);
     } finally {
@@ -124,8 +125,8 @@ const SettingsPage = () => {
       toast.success(`已暂停「${plugin.name}」`);
       await refreshData();
       window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '暂停失败';
+    } catch (err) {
+      const msg = extractApiError(err, '暂停失败');
       logger.error('Suspend plugin failed', { error: String(err), pluginKey: plugin.pluginKey });
       toast.error(msg);
     } finally {
@@ -140,8 +141,8 @@ const SettingsPage = () => {
       toast.success(`已恢复「${plugin.name}」`);
       await refreshData();
       window.dispatchEvent(new CustomEvent('life-os:plugin-updated'));
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '恢复失败';
+    } catch (err) {
+      const msg = extractApiError(err, '恢复失败');
       logger.error('Resume plugin failed', { error: String(err), pluginKey: plugin.pluginKey });
       toast.error(msg);
     } finally {
@@ -306,8 +307,8 @@ function InviteCodeManager() {
     try {
       const list = await authApi.inviteList();
       setCodes(list);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '邀请码列表加载失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '邀请码列表加载失败'));
     }
   };
 
@@ -321,8 +322,8 @@ function InviteCodeManager() {
       const created = await authApi.inviteCreate(count, days);
       toast.success(`已生成 ${created.length} 个邀请码`);
       refresh();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '生成失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '生成失败'));
     } finally {
       setLoading(false);
     }
@@ -347,8 +348,8 @@ function InviteCodeManager() {
         toast.success('已作废');
         refresh();
       }
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '作废失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '作废失败'));
     }
   };
 

@@ -29,6 +29,7 @@ import {
 } from '@client/src/api/rpa-manager';
 import type { ExcelCellValue, RpaFileInfo } from '@shared/api.interface';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@client/src/components/ui/card';
+import { extractApiError } from '@client/src/utils/api-error';
 import { Button } from '@client/src/components/ui/button';
 import { Badge } from '@client/src/components/ui/badge';
 import { Input } from '@client/src/components/ui/input';
@@ -112,8 +113,8 @@ const RpaManagerPage = () => {
         toast.warning('该路径下未找到 Excel 文件');
       }
       await refreshSaved();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '选择文件失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '选择文件失败'));
     } finally {
       setPicking(null);
     }
@@ -132,8 +133,8 @@ const RpaManagerPage = () => {
         toast.warning('该文件夹下没有 Excel 文件');
       }
       await refreshSaved();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '选择文件夹失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '选择文件夹失败'));
     } finally {
       setPicking(null);
     }
@@ -163,8 +164,8 @@ const RpaManagerPage = () => {
       }
       await refreshSaved();
       setImportPath('');
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '导入失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '导入失败'));
     } finally {
       setImporting(false);
     }
@@ -183,8 +184,8 @@ const RpaManagerPage = () => {
         dirty: false,
       });
       toast.success(`已读取「${file.fileName}」`);
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '读取失败';
+    } catch (err) {
+      const msg = extractApiError(err, '读取失败');
       logger.error('Read saved excel failed', String(err));
       toast.error(msg);
     } finally {
@@ -245,8 +246,8 @@ const RpaManagerPage = () => {
       setEditor((prev) => (prev ? { ...prev, dirty: false } : prev));
       toast.success(`已保存并覆盖原文件「${info.fileName}」（${formatSize(info.size)}）`);
       await refreshSaved();
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '保存失败';
+    } catch (err) {
+      const msg = extractApiError(err, '保存失败');
       logger.error('Save excel failed', String(err));
       toast.error(msg);
     } finally {
@@ -282,8 +283,8 @@ const RpaManagerPage = () => {
       if (editor?.path && editor.path === file.path) {
         setEditor(null);
       }
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || '移除失败';
+    } catch (err) {
+      const msg = extractApiError(err, '移除失败');
       logger.error('Delete rpa file failed', String(err));
       toast.error(msg);
     } finally {
@@ -297,8 +298,8 @@ const RpaManagerPage = () => {
     try {
       await openRpaFolder(file.path);
       toast.success(`已在文件管理器中打开：${file.directory}`);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '打开文件夹失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '打开文件夹失败'));
     } finally {
       setOpeningFolder(null);
     }
@@ -310,8 +311,8 @@ const RpaManagerPage = () => {
     try {
       await openRpaLibraryFolder();
       toast.success('已打开本地文件库索引目录');
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || '打开文件夹失败');
+    } catch (err) {
+      toast.error(extractApiError(err, '打开文件夹失败'));
     } finally {
       setOpeningLibrary(false);
     }
