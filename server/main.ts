@@ -21,6 +21,8 @@ async function bootstrap() {
   app.setBaseViewsDir(join(process.cwd(), 'dist/client'));
   app.setViewEngine('html');
   app.engine('html', hbsExpressEngine);
+  // 生产模式：静态资源（JS/CSS/图片）由后端直接服务
+  app.useStaticAssets(join(process.cwd(), 'dist/client'));
 
   await app.listen(port, host);
   logger.log(`Server running on ${host}:${port}`);

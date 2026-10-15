@@ -1,5 +1,6 @@
 ﻿import { Controller, Get, Post, Delete, Param, Body, Patch, Req } from '@nestjs/common';
 import { NeedLogin } from '../../platform-local/need-login';
+import { Roles } from '../auth/roles.decorator';
 import { PluginsService } from './plugins.service';
 import { UpdatePluginDtoClass } from './plugins.dto';
 import { PluginMethodRegistry } from './plugin-method.registry';
@@ -50,6 +51,7 @@ export class PluginsController {
     return { methods, count: methods.length };
   }
 
+  @Roles('admin')
   @Post('methods/:methodId/execute')
   async executeMethod(
     @Param('methodId') methodId: string,
@@ -64,26 +66,43 @@ export class PluginsController {
     );
   }
 
+  @Roles('admin')
   @Post('install/:pluginKey')
-  async install(@Param('pluginKey') pluginKey: string): Promise<PluginConfig> {
-    return this.pluginsService.installPlugin(pluginKey);
+  async install(
+    @Param('pluginKey') pluginKey: string,
+    @Req() req: any,
+  ): Promise<PluginConfig> {
+    return this.pluginsService.installPlugin(pluginKey, req.userContext?.userId || '');
   }
 
+  @Roles('admin')
   @Post('uninstall/:pluginKey')
-  async uninstall(@Param('pluginKey') pluginKey: string): Promise<{ success: boolean }> {
-    return this.pluginsService.uninstallPlugin(pluginKey);
+  async uninstall(
+    @Param('pluginKey') pluginKey: string,
+    @Req() req: any,
+  ): Promise<{ success: boolean }> {
+    return this.pluginsService.uninstallPlugin(pluginKey, req.userContext?.userId || '');
   }
 
+  @Roles('admin')
   @Post('suspend/:pluginKey')
-  async suspend(@Param('pluginKey') pluginKey: string): Promise<PluginConfig> {
-    return this.pluginsService.suspendPlugin(pluginKey);
+  async suspend(
+    @Param('pluginKey') pluginKey: string,
+    @Req() req: any,
+  ): Promise<PluginConfig> {
+    return this.pluginsService.suspendPlugin(pluginKey, req.userContext?.userId || '');
   }
 
+  @Roles('admin')
   @Post('resume/:pluginKey')
-  async resume(@Param('pluginKey') pluginKey: string): Promise<PluginConfig> {
-    return this.pluginsService.resumePlugin(pluginKey);
+  async resume(
+    @Param('pluginKey') pluginKey: string,
+    @Req() req: any,
+  ): Promise<PluginConfig> {
+    return this.pluginsService.resumePlugin(pluginKey, req.userContext?.userId || '');
   }
 
+  @Roles('admin')
   @Patch(':id')
   async update(
     @Param('id') id: string,

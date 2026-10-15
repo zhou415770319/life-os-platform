@@ -801,30 +801,84 @@ export interface ReadExcelResult {
 // ===== 儿童定时播放・家长远程控制 (child-tv) =====
 export type ChildTvSourceType = 'folder' | 'file' | 'url';
 export type ChildTvMediaType = 'video' | 'audio';
+export type ChildTvCollectionItemType = 'folder' | 'file' | 'url';
+
+/** 合集条目 */
+export interface ChildTvCollectionItem {
+  id: string;
+  type: ChildTvCollectionItemType;
+  /** 文件夹路径 / 文件路径 / URL */
+  value: string;
+  /** 条目显示标题（URL 场景可自定义，folder/file 自动取路径名） */
+  title?: string;
+  /** URL 为合集地址时解析出的多个视频地址（仅展示用，播放时重新解析） */
+  expandedUrls?: string[];
+}
+
+/** 播放合集：有序条目列表（folder 内文件按文件名排序，条目间支持手动调序） */
+export interface ChildTvCollection {
+  id: string;
+  name: string;
+  items: ChildTvCollectionItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChildTvCollectionInput {
+  name: string;
+  items?: ChildTvCollectionItem[];
+}
+
+/** 解析出的可播放条目（标题 + 地址，合集展开时每项一条） */
+export interface ChildTvResolvedItem {
+  /** 视频/音频名称（合集项来自平台标题，直链无标题） */
+  title?: string;
+  /** 可播放地址（直链或解析后的播放 URL） */
+  url: string;
+}
+
+/** 解析 URL 的结果（直链 or 合集展开） */
+export interface ChildTvResolveUrlResult {
+  isDirect: boolean;
+  /** 兼容旧字段：仅地址列表 */
+  urls: string[];
+  /** 带标题的解析条目（合集/视频页展开时逐条列出，用于界面展示与播放命名） */
+  items?: ChildTvResolvedItem[];
+  /** 识别到的平台（douyin / douyin-selected / bilibili / ximalaya / generic / direct） */
+  platform?: string;
+  /** 解析失败时的错误提示 */
+  error?: string;
+}
 
 export interface ChildTvSchedule {
   id: string;
   /** 时段名称 */
   name: string;
+  /** 适用星期（1=周一 … 7=周日；空数组=每天） */
+  weekdays: number[];
   /** 开始时间 HH:MM */
   start: string;
   /** 时长（分钟，1-1440），支持跨天 */
   durationMinutes: number;
-  sourceType: ChildTvSourceType;
-  /** 文件夹路径 / 单文件路径 / http(s) URL */
-  source: string;
+  /** 关联合集 id */
+  collectionId: string;
+  /** 合集名称快照（展示用） */
+  collectionName?: string;
   mediaType: ChildTvMediaType;
   enabled: boolean;
+  /** 兼容旧数据：直接来源类型（迁移时转换为合集） */
+  legacySourceType?: ChildTvSourceType;
+  legacySource?: string;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface ChildTvScheduleInput {
   name: string;
+  weekdays?: number[];
   start: string;
   durationMinutes: number;
-  sourceType: ChildTvSourceType;
-  source: string;
+  collectionId: string;
   mediaType: ChildTvMediaType;
   enabled?: boolean;
 }
@@ -846,15 +900,10 @@ export interface ChildTvRuntimeStatus {
   /** 手动播放（家长远程立即播放） */
   manual: boolean;
   nextSchedule: ChildTvNextSchedule | null;
-  locked: boolean;
-  lockReason: 'playback' | 'manual' | 'remote' | null;
-  lockEndsAt: string | null;
   /** mpv 进程状态 */
   mpv: 'running' | 'stopped' | 'missing';
   /** 是否检测到 mpv 可执行文件 */
   mpvAvailable: boolean;
-  /** 服务是否有管理员权限（锁定功能依赖） */
-  admin: boolean;
   /** 观看页 PIN 是否已启用 */
   pinEnabled: boolean;
   lastLog: string;
@@ -900,70 +949,34 @@ export interface ChildTvAuthInfo {
   pinEnabled: boolean;
 }
 
-/** 儿童端账号（多账号体系：parent + child，child 由家长创建并绑定） */
-export interface ChildTvAccountInfo {
-  username: string;
-  role: 'parent' | 'child';
-  displayName: string;
-  /** child 账号归属的家长用户名 */
-  boundTo: string | null;
-  /** 家长端生成的绑定码（儿童端受控模式凭此连接） */
-  bindCode: string | null;
-  /** 账号级锁定状态 */
-  locked: boolean;
-  lockReason: 'playback' | 'manual' | 'remote' | null;
-  lockEndsAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** 家长端下发/儿童端拉取的同步状态（双机受控模式） */
-export interface ChildTvSyncState {
-  /** 状态版本号：儿童端据此判断是否有变化 */
-  version: number;
-  /** 本账号是否被家长锁定 */
-  locked: boolean;
-  lockReason: 'playback' | 'manual' | 'remote' | null;
-  lockEndsAt: string | null;
-  /** 家长端当前应播放的时段（null = 停止） */
-  playingScheduleId: string | null;
-  playingTitle: string;
-  playingEndsAt: string | null;
-  /** 完整时段表（儿童端本机解析资源用） */
-  schedules: ChildTvSchedule[];
-  /** 家长端当前时间 ISO（两端对时） */
-  serverTime: string;
-}
-
-/** 家长端 SSE 广播事件载荷（init 为连接建立/重连时推送的全量同步状态） */
-export interface ChildTvSyncEvent {
-  type: 'init' | 'lock' | 'unlock' | 'play' | 'stop' | 'schedule-change' | 'ping';
-  account: string;
-  scheduleId?: string | null;
-  title?: string;
-  endsAt?: string | null;
-  reason?: 'playback' | 'manual' | 'remote' | null;
-  minutes?: number;
-}
-
 export interface ChildTvSettings {
   /** 观看页 PIN（sha256 加盐哈希），null 表示未启用 */
   pinHash: string | null;
-  /** 默认锁定时长（分钟），默认 240 */
-  defaultLockMinutes: number;
   /** 手动立即播放的默认时长（分钟），默认 120 */
   immediatePlayDurationMinutes: number;
   /** 自定义 mpv 可执行文件路径（留空自动检测） */
   mpvPath: string;
-  /** 受控模式（儿童端）：连接家长端、接收锁定/播放指令 */
-  controlled: {
-    enabled: boolean;
-    /** 家长端地址，如 http://192.168.1.10:3003 */
-    parentUrl: string;
-    /** 本机儿童账号（家长端创建的账号名） */
-    childUsername: string;
-    /** 家长端生成的绑定码 */
-    bindCode: string;
-  };
+}
+
+// ===== 用户系统（Auth） =====
+
+export type UserRole = 'admin' | 'user';
+
+export interface AuthLoginResult {
+  token: string;
+  username: string;
+  role: UserRole;
+  expiresIn: number;
+}
+
+export interface AuthMeResult {
+  loggedIn: boolean;
+  userId?: string;
+  username?: string;
+  role?: UserRole;
+}
+
+export interface AuthBootstrapResult {
+  initialized: boolean;
 }
 

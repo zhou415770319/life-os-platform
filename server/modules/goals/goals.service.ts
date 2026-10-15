@@ -1,7 +1,7 @@
 ﻿import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
-import { eq, ne, like, ilike, and, or, desc, asc, count, gte, lte, gt, lt, sql } from '@server/storage/drizzle-compat';
+import { eq, and, desc, count } from '@server/storage/drizzle-compat';
 import type { LifeGoal, CreateGoalDto, UpdateGoalDto } from '@shared/api.interface';
 import { lifeGoals } from '@server/database/schema';
 
@@ -28,18 +28,22 @@ export class GoalsService {
     };
   }
 
-  async findAll(page?: number, pageSize?: number): Promise<{ items: LifeGoal[]; total: number }> {
+  async findAll(userId: string, page?: number, pageSize?: number): Promise<{ items: LifeGoal[]; total: number }> {
     const size = pageSize ?? 0;
     const pageNum = page ?? 1;
 
-    const query = this.db.select().from(lifeGoals).orderBy(desc(lifeGoals.createdAt));
+    const query = this.db
+      .select()
+      .from(lifeGoals)
+      .where(eq(lifeGoals.createdBy, userId))
+      .orderBy(desc(lifeGoals.createdAt));
     const paginatedQuery = size > 0
       ? query.limit(size).offset((pageNum - 1) * size)
       : query;
 
     const [rows, totalResult] = await Promise.all([
       paginatedQuery,
-      this.db.select({ count: count() }).from(lifeGoals),
+      this.db.select({ count: count() }).from(lifeGoals).where(eq(lifeGoals.createdBy, userId)),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -49,8 +53,11 @@ export class GoalsService {
     return { items, total };
   }
 
-  async findOne(id: string): Promise<LifeGoal> {
-    const rows = await this.db.select().from(lifeGoals).where(eq(lifeGoals.id, id));
+  async findOne(id: string, userId: string): Promise<LifeGoal> {
+    const rows = await this.db
+      .select()
+      .from(lifeGoals)
+      .where(and(eq(lifeGoals.id, id), eq(lifeGoals.createdBy, userId)));
     if (rows.length === 0) {
       throw new NotFoundException('目标不存在');
     }
@@ -63,7 +70,7 @@ export class GoalsService {
     return Math.round((completed / milestones.length) * 100);
   }
 
-  async create(dto: CreateGoalDto): Promise<LifeGoal> {
+  async create(dto: CreateGoalDto, userId: string): Promise<LifeGoal> {
     const milestones = dto.milestones ?? [];
     const hasMilestones = milestones.length > 0;
     const progress = hasMilestones
@@ -83,6 +90,8 @@ export class GoalsService {
         category: dto.category,
         deadline: dto.deadline,
         milestones,
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -90,7 +99,7 @@ export class GoalsService {
     return this.toGoal(rows[0]);
   }
 
-  async update(id: string, dto: UpdateGoalDto): Promise<LifeGoal> {
+  async update(id: string, dto: UpdateGoalDto, userId: string): Promise<LifeGoal> {
     const patch: Partial<typeof lifeGoals.$inferInsert> = {};
     if (dto.title !== undefined) patch.title = dto.title;
     if (dto.description !== undefined) patch.description = dto.description;
@@ -110,9 +119,10 @@ export class GoalsService {
         if (dto.status !== undefined) patch.status = dto.status;
       }
     }
+    patch.updatedBy = userId;
 
     if (Object.keys(patch).length === 0) {
-      return this.findOne(id);
+      return this.findOne(id, userId);
     }
 
     patch.updatedAt = new Date();
@@ -120,7 +130,7 @@ export class GoalsService {
     const rows = await this.db
       .update(lifeGoals)
       .set(patch)
-      .where(eq(lifeGoals.id, id))
+      .where(and(eq(lifeGoals.id, id), eq(lifeGoals.createdBy, userId)))
       .returning();
 
     if (rows.length === 0) {
@@ -131,12 +141,14 @@ export class GoalsService {
     return this.toGoal(rows[0]);
   }
 
-  async remove(id: string): Promise<void> {
-    const rows = await this.db.delete(lifeGoals).where(eq(lifeGoals.id, id)).returning({ id: lifeGoals.id });
+  async remove(id: string, userId: string): Promise<void> {
+    const rows = await this.db
+      .delete(lifeGoals)
+      .where(and(eq(lifeGoals.id, id), eq(lifeGoals.createdBy, userId)))
+      .returning({ id: lifeGoals.id });
     if (rows.length === 0) {
       throw new NotFoundException('目标不存在');
     }
     this.logger.log(`Goal deleted: ${id}`);
   }
 }
-

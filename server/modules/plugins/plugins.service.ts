@@ -2,6 +2,7 @@
   Inject,
   Injectable,
   Logger,
+  Optional,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -23,6 +24,7 @@ import type {
 } from '@shared/api.interface';
 import { LifeLogService } from '@server/modules/life-log/life-log.service';
 import { PluginRuntimeService } from './plugin-runtime.service';
+import { ChildTvService } from '@server/modules/child-tv/child-tv.service';
 
 const CORE_PLUGIN_KEY = 'dsh-plugin-life-dashboard';
 
@@ -275,19 +277,19 @@ const SEED_PLUGINS: SeedPluginDef[] = [
   {
     pluginKey: 'dsh-plugin-child-tv',
     name: '儿童定时播放',
-    description: '儿童定时播放・家长远程控制：mpv 定时全屏播放本地/网络音视频，家长可远程播放、停止、锁定电脑，儿童观看页无操作按钮',
-    version: '1.0.0',
+    description: '儿童定时播放・单机模式：mpv 定时全屏置顶播放本地/网络音视频，家长可远程播放/停止、管理时段与内容来源，儿童观看页纯展示',
+    version: '1.2.0',
     category: 'education',
     enabled: false,
     lifecycleStatus: 'discovered',
     riskLevel: 'medium',
-    capabilities: ['child-education', 'media-player', 'scheduler', 'remote-control', 'parental-control'],
+    capabilities: ['child-education', 'media-player', 'scheduler', 'remote-control'],
     analyzable: true,
     analysisLabel: '播放次数',
     config: {
       category: 'education',
       cardTitle: '儿童定时播放',
-      cardDescription: '定时播放 · 家长远程 · 锁定电脑',
+      cardDescription: '定时播放 · 家长远程控制',
       cardIcon: 'tv',
       routePath: '/child-tv-admin',
       gradientFrom: '#f43f5e',
@@ -304,6 +306,7 @@ export class PluginsService implements OnModuleInit {
     @Inject(LOCAL_DATABASE) private readonly db: LocalDatabase,
     private readonly lifeLogService: LifeLogService,
     private readonly pluginRuntime: PluginRuntimeService,
+    @Optional() private readonly childTvService?: ChildTvService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -325,8 +328,9 @@ export class PluginsService implements OnModuleInit {
           .onConflictDoUpdate({
             target: lifePluginConfig.pluginKey,
             set: {
-              description: plugin.description,
-              version: plugin.version,
+              // 注意：不覆盖 version / description —— 这两个字段由「提交到插件市场」
+              // 写回（submitPlugin 会同步本地 manifest 与插件记录），或由用户手动维护；
+              // 若每次启动都用 SEED 覆盖，会导致本地/线上版本被旧种子值回退而不一致。
               config: plugin.config as unknown as Record<string, unknown>,
               riskLevel: plugin.riskLevel,
               capabilities: plugin.capabilities as unknown as string[],
@@ -352,17 +356,25 @@ export class PluginsService implements OnModuleInit {
   }
 
   /**
-   * 为内置插件生成/更新标准插件包，与线上市场安装的插件保持同一目录结构：
+   * 为内置插件生成标准插件包，与线上市场安装的插件保持同一目录结构：
    *   user-data/plugins/<pluginKey>/
    *     ├── manifest.json   （市场清单声明，MarketPluginDef 格式）
    *     ├── plugin.js       （入口文件：内置插件为平台代码集成型，此文件为占位说明）
    *     └── README.md       （功能说明 / 页面入口 / 数据位置 / 使用方式）
+   *
+   * 幂等策略：仅当 manifest.json 缺失时才生成（避免每次启动覆盖「提交到插件市场」
+   * 写回的版本号/描述，或用户手动维护的内容）；文件已存在则保持不动。
    */
   private ensureSeedPluginPackage(seed: SeedPluginDef): void {
     try {
       const dir = path.join(this.pluginsRoot, seed.pluginKey);
       fs.mkdirSync(dir, { recursive: true });
       const cfg = seed.config;
+      const manifestPath = path.join(dir, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        // 已存在标准包（含已提交/手动维护的版本号），跳过生成，保留现有内容
+        return;
+      }
 
       const manifest = {
         pluginKey: seed.pluginKey,
@@ -485,10 +497,17 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
   }
 
   async getInstalledPlugins(): Promise<{ items: InstalledPlugin[]; total: number }> {
+    // 已安装插件 = 启用中（enabled=true）或已暂停（suspended）的插件；
+    // 暂停的插件保留在列表中以便一键恢复，从未启用的种子插件不列入（走市场「安装」）
     const rows = await this.db
       .select()
       .from(lifePluginConfig)
-      .where(eq(lifePluginConfig.enabled, true));
+      .where(
+        or(
+          eq(lifePluginConfig.enabled, true),
+          eq(lifePluginConfig.lifecycleStatus, 'suspended'),
+        ),
+      );
     const items: InstalledPlugin[] = rows.map((row) => ({
       ...this.mapRowToPlugin(row),
       installedAt: row.createdAt
@@ -499,7 +518,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     return { items, total: items.length };
   }
 
-  async installPlugin(pluginKey: string): Promise<PluginConfig> {
+  async installPlugin(pluginKey: string, userId?: string): Promise<PluginConfig> {
     try {
       const result = await this.db.transaction(async (tx) => {
         const existing = await tx
@@ -553,7 +572,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
         eventCategory: 'plugins',
         contentSummary: `安装插件：${result.name}`,
         metadata: { pluginKey },
-      });
+      }, userId ?? '');
 
       return this.mapRowToPlugin(result);
     } catch (error) {
@@ -567,7 +586,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
   }
 
-  async uninstallPlugin(pluginKey: string): Promise<{ success: boolean }> {
+  async uninstallPlugin(pluginKey: string, userId?: string): Promise<{ success: boolean }> {
     try {
       if (pluginKey === CORE_PLUGIN_KEY) {
         throw new BadRequestException('核心插件不可卸载');
@@ -608,7 +627,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
         eventCategory: 'plugins',
         contentSummary: `卸载插件：${pluginName}`,
         metadata: { pluginKey },
-      });
+      }, userId ?? '');
 
       return { success: true };
     } catch (error) {
@@ -625,7 +644,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
   }
 
-  async suspendPlugin(pluginKey: string): Promise<PluginConfig> {
+  async suspendPlugin(pluginKey: string, userId?: string): Promise<PluginConfig> {
     const existing = await this.db
       .select()
       .from(lifePluginConfig)
@@ -643,7 +662,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
 
     const [row] = await this.db
       .update(lifePluginConfig)
-      .set({ lifecycleStatus: 'suspended' })
+      .set({ lifecycleStatus: 'suspended', enabled: false })
       .where(eq(lifePluginConfig.pluginKey, pluginKey))
       .returning();
 
@@ -652,19 +671,24 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
 
     this.logger.log(`Plugin suspended: ${pluginKey}`);
-    // 暂停：注销云函数（恢复时重新装载）
+    // 暂停：注销云函数（恢复时重新装载）；内置模块如有暂停钩子一并停止（如 child-tv 定时调度）
     await this.pluginRuntime.unload(pluginKey);
+    try {
+      await this.childTvService?.onPluginSuspended?.();
+    } catch (err) {
+      this.logger.warn(`Failed to notify builtin module on suspend ${pluginKey}: ${String(err)}`);
+    }
     void this.lifeLogService.append({
       eventType: 'plugin_suspended',
       eventCategory: 'plugins',
       contentSummary: `暂停插件：${row.name}`,
       metadata: { pluginKey },
-    });
+    }, userId ?? '');
 
     return this.mapRowToPlugin(row);
   }
 
-  async resumePlugin(pluginKey: string): Promise<PluginConfig> {
+  async resumePlugin(pluginKey: string, userId?: string): Promise<PluginConfig> {
     const existing = await this.db
       .select()
       .from(lifePluginConfig)
@@ -679,7 +703,7 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
 
     const [row] = await this.db
       .update(lifePluginConfig)
-      .set({ lifecycleStatus: 'active' })
+      .set({ lifecycleStatus: 'active', enabled: true })
       .where(eq(lifePluginConfig.pluginKey, pluginKey))
       .returning();
 
@@ -688,14 +712,19 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
 
     this.logger.log(`Plugin resumed: ${pluginKey}`);
-    // 恢复：重新装载云函数
+    // 恢复：重新装载云函数；内置模块如有恢复钩子一并重启
     await this.pluginRuntime.load(pluginKey);
+    try {
+      await this.childTvService?.onPluginResumed?.();
+    } catch (err) {
+      this.logger.warn(`Failed to notify builtin module on resume ${pluginKey}: ${String(err)}`);
+    }
     void this.lifeLogService.append({
       eventType: 'plugin_resumed',
       eventCategory: 'plugins',
       contentSummary: `恢复插件：${row.name}`,
       metadata: { pluginKey },
-    });
+    }, userId ?? '');
 
     return this.mapRowToPlugin(row);
   }

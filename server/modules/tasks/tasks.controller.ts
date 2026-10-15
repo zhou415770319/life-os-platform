@@ -24,18 +24,27 @@ import type {
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
 
+  private uid(req: { userContext: { userId: string } }): string {
+    return req.userContext.userId;
+  }
+
   @Get('focus-stats')
-  async getFocusStats(): Promise<Record<string, { count: number; minutes: number }>> {
-    return this.tasksService.getFocusStats();
+  async getFocusStats(
+    @Req() req: { userContext: { userId: string } },
+  ): Promise<Record<string, { count: number; minutes: number }>> {
+    return this.tasksService.getFocusStats(this.uid(req));
   }
 
   @Get('stats/summary')
-  async getStatsSummary(): Promise<TaskStatsSummary> {
-    return this.tasksService.getStatsSummary();
+  async getStatsSummary(
+    @Req() req: { userContext: { userId: string } },
+  ): Promise<TaskStatsSummary> {
+    return this.tasksService.getStatsSummary(this.uid(req));
   }
 
   @Get()
   async findAll(
+    @Req() req: { userContext: { userId: string } },
     @Query('status') status?: string,
     @Query('priority') priority?: string,
     @Query('quadrant') quadrant?: string,
@@ -44,20 +53,26 @@ export class TasksController {
     @Query('page') page = '1',
     @Query('pageSize') pageSize = '20',
   ): Promise<ListResponse<LifeTask>> {
-    return this.tasksService.findAll({
-      status,
-      priority,
-      quadrant,
-      project,
-      search,
-      page: parseInt(page, 10) || 1,
-      pageSize: parseInt(pageSize, 10) || 20,
-    });
+    return this.tasksService.findAll(
+      {
+        status,
+        priority,
+        quadrant,
+        project,
+        search,
+        page: parseInt(page, 10) || 1,
+        pageSize: parseInt(pageSize, 10) || 20,
+      },
+      this.uid(req),
+    );
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string): Promise<LifeTask> {
-    return this.tasksService.findOne(id);
+  async findOne(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<LifeTask> {
+    return this.tasksService.findOne(id, this.uid(req));
   }
 
   @Post()
@@ -80,8 +95,10 @@ export class TasksController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ success: boolean }> {
-    return this.tasksService.remove(id);
+  async remove(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<{ success: boolean }> {
+    return this.tasksService.remove(id, this.uid(req));
   }
 }
-

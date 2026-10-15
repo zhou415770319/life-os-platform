@@ -49,10 +49,10 @@ export class ChildResourcesService {
     };
   }
 
-  async findAll(query: ListQuery): Promise<ListResponse<ChildResource>> {
+  async findAll(query: ListQuery, userId: string): Promise<ListResponse<ChildResource>> {
     const { category, search, resourceType, page, pageSize } = query;
 
-    const conditions = [];
+    const conditions: any[] = [eq(lifeChildResources.createdBy, userId)];
     if (category) {
       conditions.push(eq(lifeChildResources.category, category));
     }
@@ -69,7 +69,7 @@ export class ChildResourcesService {
       );
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [countResult, rows] = await Promise.all([
       this.db
@@ -91,11 +91,11 @@ export class ChildResourcesService {
     return { items, total };
   }
 
-  async findOne(id: string): Promise<ChildResource> {
+  async findOne(id: string, userId: string): Promise<ChildResource> {
     const rows = await this.db
       .select()
       .from(lifeChildResources)
-      .where(eq(lifeChildResources.id, id))
+      .where(and(eq(lifeChildResources.id, id), eq(lifeChildResources.createdBy, userId)))
       .limit(1);
 
     if (rows.length === 0) {
@@ -163,7 +163,7 @@ export class ChildResourcesService {
     const [row] = await this.db
       .update(lifeChildResources)
       .set(patch)
-      .where(eq(lifeChildResources.id, id))
+      .where(and(eq(lifeChildResources.id, id), eq(lifeChildResources.createdBy, userId)))
       .returning();
 
     if (!row) {
@@ -174,10 +174,10 @@ export class ChildResourcesService {
     return this.mapRowToResource(row);
   }
 
-  async remove(id: string): Promise<{ success: boolean }> {
+  async remove(id: string, userId: string): Promise<{ success: boolean }> {
     const deleted = await this.db
       .delete(lifeChildResources)
-      .where(eq(lifeChildResources.id, id))
+      .where(and(eq(lifeChildResources.id, id), eq(lifeChildResources.createdBy, userId)))
       .returning({ id: lifeChildResources.id });
 
     if (deleted.length === 0) {
@@ -188,10 +188,11 @@ export class ChildResourcesService {
     return { success: true };
   }
 
-  async getCategories(): Promise<{ items: string[] }> {
+  async getCategories(userId: string): Promise<{ items: string[] }> {
     const rows = await this.db
       .select({ category: lifeChildResources.category })
       .from(lifeChildResources)
+      .where(eq(lifeChildResources.createdBy, userId))
       .groupBy(lifeChildResources.category)
       .orderBy(asc(lifeChildResources.category));
 

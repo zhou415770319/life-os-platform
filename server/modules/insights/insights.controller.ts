@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Req } from '@nestjs/common';
 import { NeedLogin } from '../../platform-local/need-login';
 import { InsightsService } from './insights.service';
 
@@ -8,7 +8,7 @@ export class InsightsController {
   constructor(private readonly insightsService: InsightsService) {}
 
   @Get('summary')
-  getSummary() {
-    return this.insightsService.getSummary();
+  getSummary(@Req() req: { userContext: { userId: string } }) {
+    return this.insightsService.getSummary(req.userContext.userId);
   }
 }

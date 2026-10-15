@@ -12,25 +12,27 @@ export interface PomodoroRecord {
   abandoned: boolean;
   /** 关联 GTD 任务 ID（可选） */
   taskId?: string;
+  /** 归属用户 */
+  userId?: string;
 }
 
 @Injectable()
 export class PomodoroService {
   private readonly store = new JsonStore<PomodoroRecord>('pomodoro-records.json');
 
-  async getRecords(): Promise<PomodoroRecord[]> {
-    const rows = this.store.findAll();
+  async getRecords(userId: string): Promise<PomodoroRecord[]> {
+    const rows = this.store.findAll().filter((r) => r.userId === userId);
     return rows.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
   }
 
-  async getStats(): Promise<{
+  async getStats(userId: string): Promise<{
     totalCount: number;
     totalMinutes: number;
     todayCount: number;
     todayMinutes: number;
     focusRate: number;
   }> {
-    const rows = this.store.findAll();
+    const rows = this.store.findAll().filter((r) => r.userId === userId);
     const todayStr = new Date().toISOString().slice(0, 10);
     const completed = rows.filter((r) => !r.abandoned);
     const today = completed.filter((r) => r.completedAt.startsWith(todayStr));
@@ -46,13 +48,16 @@ export class PomodoroService {
     };
   }
 
-  async createRecord(dto: {
-    taskName?: string;
-    durationMinutes: number;
-    completedAt: string;
-    abandoned?: boolean;
-    taskId?: string;
-  }): Promise<PomodoroRecord> {
+  async createRecord(
+    dto: {
+      taskName?: string;
+      durationMinutes: number;
+      completedAt: string;
+      abandoned?: boolean;
+      taskId?: string;
+    },
+    userId: string,
+  ): Promise<PomodoroRecord> {
     const record: PomodoroRecord = {
       id: crypto.randomUUID(),
       taskName: dto.taskName?.trim() || '未命名专注',
@@ -60,19 +65,22 @@ export class PomodoroService {
       startedAt: new Date(Date.parse(dto.completedAt) - dto.durationMinutes * 60_000).toISOString(),
       completedAt: dto.completedAt,
       abandoned: dto.abandoned ?? false,
+      userId,
       ...(dto.taskId ? { taskId: dto.taskId } : {}),
     };
     return this.store.create(record);
   }
 
-  async deleteRecord(id: string): Promise<void> {
+  async deleteRecord(id: string, userId: string): Promise<void> {
+    const row = this.store.findAll().find((r) => r.id === id);
+    if (!row || row.userId !== userId) throw new NotFoundException('记录不存在');
     const removed = this.store.remove(id);
     if (!removed) throw new NotFoundException('记录不存在');
   }
 
-  /** 按任务聚合专注统计（仅供 GTD 联动使用） */
-  getFocusStatsByTask(): Record<string, { count: number; minutes: number }> {
-    const rows = this.store.findAll().filter((r) => !r.abandoned && r.taskId);
+  /** 按任务聚合专注统计（仅供 GTD 联动使用，按用户隔离） */
+  getFocusStatsByTask(userId: string): Record<string, { count: number; minutes: number }> {
+    const rows = this.store.findAll().filter((r) => r.userId === userId && !r.abandoned && r.taskId);
     const map: Record<string, { count: number; minutes: number }> = {};
     for (const r of rows) {
       if (!r.taskId) continue;

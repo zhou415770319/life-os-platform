@@ -1,22 +1,25 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Req } from '@nestjs/common';
+import { NeedLogin } from '../../platform-local/need-login';
 import { PomodoroService } from './pomodoro.service';
 
+@NeedLogin()
 @Controller('api/pomodoro')
 export class PomodoroController {
   constructor(private readonly pomodoroService: PomodoroService) {}
 
   @Get('records')
-  getRecords() {
-    return this.pomodoroService.getRecords();
+  getRecords(@Req() req: { userContext: { userId: string } }) {
+    return this.pomodoroService.getRecords(req.userContext.userId);
   }
 
   @Get('stats')
-  getStats() {
-    return this.pomodoroService.getStats();
+  getStats(@Req() req: { userContext: { userId: string } }) {
+    return this.pomodoroService.getStats(req.userContext.userId);
   }
 
   @Post('records')
   createRecord(
+    @Req() req: { userContext: { userId: string } },
     @Body()
     dto: {
       taskName?: string;
@@ -25,11 +28,14 @@ export class PomodoroController {
       abandoned?: boolean;
     },
   ) {
-    return this.pomodoroService.createRecord(dto);
+    return this.pomodoroService.createRecord(dto, req.userContext.userId);
   }
 
   @Delete('records/:id')
-  deleteRecord(@Param('id') id: string) {
-    return this.pomodoroService.deleteRecord(id);
+  deleteRecord(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ) {
+    return this.pomodoroService.deleteRecord(id, req.userContext.userId);
   }
 }

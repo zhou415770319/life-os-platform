@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Param, Body, Query, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import { Controller, Get, Post, Param, Body, Query, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { Roles } from '../auth/roles.decorator';
 import { MarketService } from './market.service';
 import type { PluginConfig, MarketPluginItem } from '@shared/api.interface';
 
@@ -15,22 +16,37 @@ export class MarketController {
     return this.marketService.listMarketPlugins(force === '1' || force === 'true');
   }
 
-  /** 安装市场插件 */
+  /** 安装市场插件（管理员） */
+  @Roles('admin')
   @Post('install/:pluginKey')
-  install(@Param('pluginKey') pluginKey: string): Promise<PluginConfig> {
-    return this.marketService.install(pluginKey);
+  install(
+    @Req() req: Request,
+    @Param('pluginKey') pluginKey: string,
+  ): Promise<PluginConfig> {
+    const { userContext } = req as Request & { userContext: { userId: string } };
+    return this.marketService.install(pluginKey, userContext.userId);
   }
 
-  /** 卸载市场插件（保留数据） */
+  /** 卸载市场插件（保留数据，管理员） */
+  @Roles('admin')
   @Post('uninstall/:pluginKey')
-  uninstall(@Param('pluginKey') pluginKey: string): Promise<{ success: boolean }> {
-    return this.marketService.uninstall(pluginKey);
+  uninstall(
+    @Req() req: Request,
+    @Param('pluginKey') pluginKey: string,
+  ): Promise<{ success: boolean }> {
+    const { userContext } = req as Request & { userContext: { userId: string } };
+    return this.marketService.uninstall(pluginKey, userContext.userId);
   }
 
-  /** 更新市场插件 */
+  /** 更新市场插件（管理员） */
+  @Roles('admin')
   @Post('update/:pluginKey')
-  update(@Param('pluginKey') pluginKey: string): Promise<PluginConfig> {
-    return this.marketService.update(pluginKey);
+  update(
+    @Req() req: Request,
+    @Param('pluginKey') pluginKey: string,
+  ): Promise<PluginConfig> {
+    const { userContext } = req as Request & { userContext: { userId: string } };
+    return this.marketService.update(pluginKey, userContext.userId);
   }
 
   /** 插件文件服务（前端 PluginHost 动态加载入口 JS / manifest） */
@@ -52,7 +68,8 @@ export class MarketController {
     return this.marketService.getCollection(pluginKey, collection);
   }
 
-  /** 写插件数据集合（add / update / delete） */
+  /** 写插件数据集合（add / update / delete，管理员） */
+  @Roles('admin')
   @Post('data/:pluginKey/:collection')
   mutate(
     @Param('pluginKey') pluginKey: string,

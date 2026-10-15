@@ -47,10 +47,10 @@ export class LifeLogService {
     };
   }
 
-  async findAll(query: ListQuery): Promise<ListResponse<LifeLogEntry>> {
+  async findAll(query: ListQuery, userId: string): Promise<ListResponse<LifeLogEntry>> {
     const { eventType, category, startDate, endDate, page, pageSize } = query;
 
-    const conditions = [];
+    const conditions: any[] = [eq(lifeLifeLogs.createdBy, userId)];
     if (eventType) {
       conditions.push(eq(lifeLifeLogs.eventType, eventType));
     }
@@ -66,7 +66,7 @@ export class LifeLogService {
       conditions.push(lte(lifeLifeLogs.createdAt, end));
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [countResult, rows] = await Promise.all([
       this.db
@@ -88,11 +88,11 @@ export class LifeLogService {
     return { items, total };
   }
 
-  async findOne(id: string): Promise<LifeLogEntry> {
+  async findOne(id: string, userId: string): Promise<LifeLogEntry> {
     const rows = await this.db
       .select()
       .from(lifeLifeLogs)
-      .where(eq(lifeLifeLogs.id, id))
+      .where(and(eq(lifeLifeLogs.id, id), eq(lifeLifeLogs.createdBy, userId)))
       .limit(1);
 
     if (rows.length === 0) {
@@ -102,12 +102,15 @@ export class LifeLogService {
     return this.mapRowToEntry(rows[0]);
   }
 
-  async append(params: {
-    eventType: string;
-    eventCategory: LifeLogCategory;
-    contentSummary: string;
-    metadata?: Record<string, unknown>;
-  }): Promise<LifeLogEntry> {
+  async append(
+    params: {
+      eventType: string;
+      eventCategory: LifeLogCategory;
+      contentSummary: string;
+      metadata?: Record<string, unknown>;
+    },
+    userId: string,
+  ): Promise<LifeLogEntry> {
     const [row] = await this.db
       .insert(lifeLifeLogs)
       .values({
@@ -115,6 +118,7 @@ export class LifeLogService {
         eventCategory: params.eventCategory,
         contentSummary: params.contentSummary,
         metadata: params.metadata ?? {},
+        createdBy: userId,
       })
       .returning();
 
@@ -122,7 +126,7 @@ export class LifeLogService {
     return this.mapRowToEntry(row);
   }
 
-  async exportAll(): Promise<{
+  async exportAll(userId: string): Promise<{
     data: LifeLogEntry[];
     exportTime: string;
     total: number;
@@ -130,6 +134,7 @@ export class LifeLogService {
     const rows = await this.db
       .select()
       .from(lifeLifeLogs)
+      .where(eq(lifeLifeLogs.createdBy, userId))
       .orderBy(desc(lifeLifeLogs.createdAt))
       .limit(10000);
 
@@ -142,13 +147,14 @@ export class LifeLogService {
     };
   }
 
-  async getCategoryStats(): Promise<CategoryStat[]> {
+  async getCategoryStats(userId: string): Promise<CategoryStat[]> {
     const rows = await this.db
       .select({
         category: lifeLifeLogs.eventCategory,
         count: count(),
       })
       .from(lifeLifeLogs)
+      .where(eq(lifeLifeLogs.createdBy, userId))
       .groupBy(lifeLifeLogs.eventCategory)
       .orderBy(lifeLifeLogs.eventCategory);
 

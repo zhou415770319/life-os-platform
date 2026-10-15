@@ -11,6 +11,8 @@ export interface TimeBlackholeRecord {
   /** 记录日期 YYYY-MM-DD */
   recordDate: string;
   createdAt: string;
+  /** 归属用户 */
+  userId?: string;
 }
 
 @Injectable()
@@ -22,21 +24,21 @@ export class TimeBlackholeService {
     return new Date().toISOString().slice(0, 10);
   }
 
-  async getRecords(recordDate?: string): Promise<TimeBlackholeRecord[]> {
-    const rows = this.store.findAll();
+  async getRecords(userId: string, recordDate?: string): Promise<TimeBlackholeRecord[]> {
+    const rows = this.store.findAll().filter((r) => r.userId === userId);
     const filtered = recordDate
       ? rows.filter((r) => r.recordDate === recordDate)
       : rows;
     return filtered.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
 
-  async getStats(): Promise<{
+  async getStats(userId: string): Promise<{
     todayMinutes: number;
     todayCount: number;
     totalMinutes: number;
     byCategory: Record<string, number>;
   }> {
-    const rows = this.store.findAll();
+    const rows = this.store.findAll().filter((r) => r.userId === userId);
     const today = this.getToday();
     const todayRows = rows.filter((r) => r.recordDate === today);
     const byCategory: Record<string, number> = {};
@@ -51,12 +53,15 @@ export class TimeBlackholeService {
     };
   }
 
-  async createRecord(dto: {
-    category: string;
-    note?: string;
-    durationMinutes: number;
-    recordDate?: string;
-  }): Promise<TimeBlackholeRecord> {
+  async createRecord(
+    dto: {
+      category: string;
+      note?: string;
+      durationMinutes: number;
+      recordDate?: string;
+    },
+    userId: string,
+  ): Promise<TimeBlackholeRecord> {
     const record: TimeBlackholeRecord = {
       id: crypto.randomUUID(),
       category: dto.category,
@@ -64,11 +69,14 @@ export class TimeBlackholeService {
       durationMinutes: dto.durationMinutes,
       recordDate: dto.recordDate || this.getToday(),
       createdAt: new Date().toISOString(),
+      userId,
     };
     return this.store.create(record);
   }
 
-  async deleteRecord(id: string): Promise<void> {
+  async deleteRecord(id: string, userId: string): Promise<void> {
+    const row = this.store.findAll().find((r) => r.id === id);
+    if (!row || row.userId !== userId) throw new NotFoundException('记录不存在');
     const removed = this.store.remove(id);
     if (!removed) throw new NotFoundException('记录不存在');
   }

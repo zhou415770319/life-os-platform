@@ -13,7 +13,7 @@ export class DashboardService {
     @Inject(LOCAL_DATABASE) private readonly db: LocalDatabase,
   ) {}
 
-  async getStats(): Promise<DashboardStats> {
+  async getStats(userId: string): Promise<DashboardStats> {
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
     const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -21,22 +21,32 @@ export class DashboardService {
     const todayStartIso = todayStart.toISOString();
     const todayEndIso = todayEnd.toISOString();
 
-    const [goalsCount] = await this.db.select({ count: count() }).from(lifeGoals);
+    const [goalsCount] = await this.db
+      .select({ count: count() })
+      .from(lifeGoals)
+      .where(eq(lifeGoals.createdBy, userId));
     const [goalsActive] = await this.db
       .select({ count: count() })
       .from(lifeGoals)
-      .where(eq(lifeGoals.status, 'active'));
-    const [habitsCount] = await this.db.select({ count: count() }).from(lifeHabits);
+      .where(and(eq(lifeGoals.status, 'active'), eq(lifeGoals.createdBy, userId)));
+    const [habitsCount] = await this.db
+      .select({ count: count() })
+      .from(lifeHabits)
+      .where(eq(lifeHabits.createdBy, userId));
     const [todayCompleted] = await this.db
       .select({ count: count() })
       .from(lifeHabitRecords)
-      .where(eq(lifeHabitRecords.recordDate, todayStr));
-    const [notesCount] = await this.db.select({ count: count() }).from(lifeNotes);
+      .where(and(eq(lifeHabitRecords.recordDate, todayStr), eq(lifeHabitRecords.createdBy, userId)));
+    const [notesCount] = await this.db
+      .select({ count: count() })
+      .from(lifeNotes)
+      .where(eq(lifeNotes.createdBy, userId));
     const [notesToday] = await this.db
       .select({ count: count() })
       .from(lifeNotes)
       .where(
         and(
+          eq(lifeNotes.createdBy, userId),
           gte(lifeNotes.createdAt, todayStartIso),
           lte(lifeNotes.createdAt, todayEndIso),
         ),

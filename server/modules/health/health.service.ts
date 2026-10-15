@@ -62,10 +62,10 @@ export class HealthService {
     };
   }
 
-  async findRecords(query: ListQuery): Promise<ListResponse<HealthRecord>> {
+  async findRecords(query: ListQuery, userId: string): Promise<ListResponse<HealthRecord>> {
     const { recordType, startDate, endDate, page, pageSize } = query;
 
-    const conditions = [];
+    const conditions: any[] = [eq(lifeHealthRecords.createdBy, userId)];
     if (recordType) {
       conditions.push(eq(lifeHealthRecords.recordType, recordType));
     }
@@ -76,7 +76,7 @@ export class HealthService {
       conditions.push(lte(lifeHealthRecords.recordDate, endDate));
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [countResult, rows] = await Promise.all([
       this.db
@@ -98,11 +98,11 @@ export class HealthService {
     return { items, total };
   }
 
-  async findOne(id: string): Promise<HealthRecord> {
+  async findOne(id: string, userId: string): Promise<HealthRecord> {
     const rows = await this.db
       .select()
       .from(lifeHealthRecords)
-      .where(eq(lifeHealthRecords.id, id))
+      .where(and(eq(lifeHealthRecords.id, id), eq(lifeHealthRecords.createdBy, userId)))
       .limit(1);
 
     if (rows.length === 0) {
@@ -152,7 +152,7 @@ export class HealthService {
     const [row] = await this.db
       .update(lifeHealthRecords)
       .set(patch)
-      .where(eq(lifeHealthRecords.id, id))
+      .where(and(eq(lifeHealthRecords.id, id), eq(lifeHealthRecords.createdBy, userId)))
       .returning();
 
     if (!row) {
@@ -163,10 +163,10 @@ export class HealthService {
     return this.mapRowToRecord(row);
   }
 
-  async remove(id: string): Promise<{ success: boolean }> {
+  async remove(id: string, userId: string): Promise<{ success: boolean }> {
     const deleted = await this.db
       .delete(lifeHealthRecords)
-      .where(eq(lifeHealthRecords.id, id))
+      .where(and(eq(lifeHealthRecords.id, id), eq(lifeHealthRecords.createdBy, userId)))
       .returning({ id: lifeHealthRecords.id });
 
     if (deleted.length === 0) {
@@ -177,7 +177,7 @@ export class HealthService {
     return { success: true };
   }
 
-  async getSummary(days: number): Promise<HealthSummary> {
+  async getSummary(days: number, userId: string): Promise<HealthSummary> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -205,7 +205,7 @@ export class HealthService {
     const latestBodyRow = await this.db
       .select()
       .from(lifeHealthRecords)
-      .where(eq(lifeHealthRecords.recordType, 'body'))
+      .where(and(eq(lifeHealthRecords.recordType, 'body'), eq(lifeHealthRecords.createdBy, userId)))
       .orderBy(desc(lifeHealthRecords.recordDate), desc(lifeHealthRecords.createdAt))
       .limit(1);
 
@@ -226,6 +226,7 @@ export class HealthService {
       .where(
         and(
           eq(lifeHealthRecords.recordType, 'body'),
+          eq(lifeHealthRecords.createdBy, userId),
           gte(lifeHealthRecords.recordDate, startDateStr),
           lte(lifeHealthRecords.recordDate, endDateStr),
         ),
@@ -255,6 +256,7 @@ export class HealthService {
       .where(
         and(
           eq(lifeHealthRecords.recordType, 'exercise'),
+          eq(lifeHealthRecords.createdBy, userId),
           gte(lifeHealthRecords.recordDate, weekMondayStr),
           lt(lifeHealthRecords.recordDate, weekSundayStr),
         ),
@@ -276,6 +278,7 @@ export class HealthService {
       .where(
         and(
           eq(lifeHealthRecords.recordType, 'sleep'),
+          eq(lifeHealthRecords.createdBy, userId),
           gte(lifeHealthRecords.recordDate, startDateStr),
           lte(lifeHealthRecords.recordDate, endDateStr),
         ),

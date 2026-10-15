@@ -20,8 +20,8 @@ import { Button } from '@client/src/components/ui/button';
 import { Badge } from '@client/src/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@client/src/components/ui/tabs';
 import { getPluginIcon } from '@client/src/utils/plugin-icons';
-import { showConfirm } from '@lark-apaas/client-toolkit';
 import PluginDetailDialog from './PluginDetailDialog';
+import SubmitMarketDialog from './SubmitMarketDialog';
 import MechanismTab from '../../PluginCenterPage/MechanismTab';
 import DevelopmentTab from '../../PluginCenterPage/DevelopmentTab';
 import Disclaimer from '@client/src/components/ui/disclaimer';
@@ -68,6 +68,8 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
   onDataChanged,
 }) => {
   const [detailPlugin, setDetailPlugin] = useState<AvailablePlugin | null>(null);
+  /** 提交市场确认弹框：可修改描述与版本号（版本号会同步写回本地 manifest.json） */
+  const [submitTarget, setSubmitTarget] = useState<InstalledPlugin | null>(null);
 
   const getInstalled = (pluginKey: string) =>
     installedPlugins.find((p) => p.pluginKey === pluginKey) ?? null;
@@ -88,19 +90,9 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
     (b.installedAt || '').localeCompare(a.installedAt || ''),
   );
 
-  /** 提交插件到市场：唤起 AI 聊天框并自动发送提交指令（由 AI 代办建分支 + PR） */
-  const handleSubmitToMarket = async (plugin: { pluginKey: string; name: string }) => {
-    const ok = await showConfirm(
-      `将「${plugin.name}」提交到 GitHub 插件市场？\n\n系统会唤起 AI 助手，自动新建分支并创建 Pull Request，由仓库管理员 review 审核后合并（不会自动合并）。`,
-    );
-    if (!ok) return;
-    window.dispatchEvent(
-      new CustomEvent('life-os:ai-chat:send', {
-        detail: {
-          text: `请把插件「${plugin.name}」（${plugin.pluginKey}）提交到插件市场：基于 main 新建分支、上传插件文件并更新市场清单、创建 Pull Request 请求仓库管理员 review 审核，不要自动合并。`,
-        },
-      }),
-    );
+  /** 提交插件到市场：打开确认弹框（可修改描述/版本号），确认后唤起 AI 聊天框自动提交（AI 代办建分支 + PR） */
+  const handleSubmitToMarket = (plugin: InstalledPlugin) => {
+    setSubmitTarget(plugin);
   };
 
   return (
@@ -311,6 +303,11 @@ const PluginCenterTab: React.FC<PluginCenterTabProps> = ({
           installed={getInstalled(detailPlugin.pluginKey)}
           onClose={() => setDetailPlugin(null)}
         />
+      )}
+
+      {/* 提交市场确认弹框：描述/版本号可修改，版本号同步写回 manifest.json */}
+      {submitTarget && (
+        <SubmitMarketDialog plugin={submitTarget} onClose={() => setSubmitTarget(null)} />
       )}
     </div>
   );

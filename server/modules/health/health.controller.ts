@@ -44,6 +44,7 @@ export class HealthController {
 
   @Get('records')
   async findRecords(
+    @Req() req: { userContext: { userId: string } },
     @Query('recordType') recordType?: HealthRecordType,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
@@ -56,12 +57,15 @@ export class HealthController {
       endDate,
       page: parseInt(page, 10) || 1,
       pageSize: parseInt(pageSize, 10) || 20,
-    });
+    }, req.userContext.userId);
   }
 
   @Get('records/:id')
-  async findOne(@Param('id') id: string): Promise<HealthRecord> {
-    return this.healthService.findOne(id);
+  async findOne(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<HealthRecord> {
+    return this.healthService.findOne(id, req.userContext.userId);
   }
 
   @Post('records')
@@ -84,17 +88,21 @@ export class HealthController {
   }
 
   @Delete('records/:id')
-  async remove(@Param('id') id: string): Promise<{ success: boolean }> {
-    return this.healthService.remove(id);
+  async remove(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<{ success: boolean }> {
+    return this.healthService.remove(id, req.userContext.userId);
   }
 
   @Get('summary')
   async getSummary(
+    @Req() req: { userContext: { userId: string } },
     @Query('days') days = '7',
   ): Promise<HealthSummary> {
     const parsedDays = parseInt(days, 10) || 7;
     const clampedDays = Math.min(Math.max(parsedDays, 1), 30);
-    return this.healthService.getSummary(clampedDays);
+    return this.healthService.getSummary(clampedDays, req.userContext.userId);
   }
 }
 

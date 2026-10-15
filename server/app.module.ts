@@ -4,6 +4,7 @@ import { Module } from '@nestjs/common';
 
 import { LocalPlatformModule } from './platform-local/local.module';
 import { LocalDatabaseModule } from './storage/local-database.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { GlobalExceptionFilter } from './common/filters/exception.filter';
 import { ViewModule } from './modules/view/view.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -30,6 +31,8 @@ import { ChildTvModule } from './modules/child-tv/child-tv.module';
   imports: [
     // 本地模式平台模块（替代平台 PlatformModule，无需平台服务）
     LocalPlatformModule,
+    // 用户系统（全局认证守卫 + 本地 JSON 用户存储）
+    AuthModule,
     // 本地 JSON 文件存储（后期可切换线上数据库）
     LocalDatabaseModule,
     // ====== @route-section: business-modules START ======

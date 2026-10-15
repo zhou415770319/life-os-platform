@@ -1,22 +1,28 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { NeedLogin } from '../../platform-local/need-login';
 import { TimeBlackholeService } from './time-blackhole.service';
 
+@NeedLogin()
 @Controller('api/time-blackhole')
 export class TimeBlackholeController {
   constructor(private readonly timeBlackholeService: TimeBlackholeService) {}
 
   @Get('records')
-  getRecords(@Query('recordDate') recordDate?: string) {
-    return this.timeBlackholeService.getRecords(recordDate);
+  getRecords(
+    @Req() req: { userContext: { userId: string } },
+    @Query('recordDate') recordDate?: string,
+  ) {
+    return this.timeBlackholeService.getRecords(req.userContext.userId, recordDate);
   }
 
   @Get('stats')
-  getStats() {
-    return this.timeBlackholeService.getStats();
+  getStats(@Req() req: { userContext: { userId: string } }) {
+    return this.timeBlackholeService.getStats(req.userContext.userId);
   }
 
   @Post('records')
   createRecord(
+    @Req() req: { userContext: { userId: string } },
     @Body()
     dto: {
       category: string;
@@ -25,11 +31,14 @@ export class TimeBlackholeController {
       recordDate?: string;
     },
   ) {
-    return this.timeBlackholeService.createRecord(dto);
+    return this.timeBlackholeService.createRecord(dto, req.userContext.userId);
   }
 
   @Delete('records/:id')
-  deleteRecord(@Param('id') id: string) {
-    return this.timeBlackholeService.deleteRecord(id);
+  deleteRecord(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ) {
+    return this.timeBlackholeService.deleteRecord(id, req.userContext.userId);
   }
 }

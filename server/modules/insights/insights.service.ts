@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
-import { desc } from '@server/storage/drizzle-compat';
+import { desc, eq } from '@server/storage/drizzle-compat';
 import { lifeGoals, lifeHabits, lifeHabitRecords } from '@server/database/schema';
 import { JsonStore } from '@server/storage/json-store';
 import { ChildResourcesService } from '@server/modules/child-resources/child-resources.service';
@@ -14,6 +14,7 @@ interface PomodoroRecord {
   startedAt: string;
   completedAt: string;
   abandoned: boolean;
+  userId?: string;
 }
 
 interface TimeBlackholeRecord {
@@ -23,6 +24,7 @@ interface TimeBlackholeRecord {
   durationMinutes: number;
   recordDate: string;
   createdAt: string;
+  userId?: string;
 }
 
 function dateRange(days: number): string[] {
@@ -66,7 +68,7 @@ export class InsightsService {
    * 规则：插件需在设置中启用并打开「参与数据分析」开关，才会纳入数据洞察与自动复盘；
    * 未设置一律不分析。
    */
-  async buildPluginStats(): Promise<
+  async buildPluginStats(userId: string): Promise<
     { pluginKey: string; name: string; label: string; value: string; detail?: string }[]
   > {
     const rows = this.pluginConfigStore.findAll();
@@ -80,8 +82,8 @@ export class InsightsService {
       try {
         switch (plugin.pluginKey) {
           case 'dsh-plugin-child-resources': {
-            const list = await this.childResourcesService.findAll({ page: 1, pageSize: 1 });
-            const categories = await this.childResourcesService.getCategories();
+            const list = await this.childResourcesService.findAll({ page: 1, pageSize: 1 }, userId);
+            const categories = await this.childResourcesService.getCategories(userId);
             stats.push({
               pluginKey: plugin.pluginKey,
               name: '儿童资料站',
@@ -103,7 +105,7 @@ export class InsightsService {
             break;
           }
           case 'dsh-plugin-pomodoro': {
-            const pomoRows = this.pomodoroStore.findAll().filter((r) => !r.abandoned);
+            const pomoRows = this.pomodoroStore.findAll().filter((r) => r.userId === userId && !r.abandoned);
             const minutes = pomoRows.reduce((s, r) => s + r.durationMinutes, 0);
             stats.push({
               pluginKey: plugin.pluginKey,
@@ -115,7 +117,7 @@ export class InsightsService {
             break;
           }
           case 'dsh-plugin-time-blackhole': {
-            const bhRows = this.blackholeStore.findAll();
+            const bhRows = this.blackholeStore.findAll().filter((r) => r.userId === userId);
             const minutes = bhRows.reduce((s, r) => s + r.durationMinutes, 0);
             stats.push({
               pluginKey: plugin.pluginKey,
@@ -147,13 +149,20 @@ export class InsightsService {
     return stats;
   }
 
-  /** 聚合各模块数据，供可视化中心使用 */
-  async getSummary() {
+  /** 聚合各模块数据，供可视化中心使用（按当前用户隔离） */
+  async getSummary(userId: string) {
     const todayStr = new Date().toISOString().slice(0, 10);
 
     // ===== 习惯 =====
-    const habits = await this.db.select().from(lifeHabits).orderBy(desc(lifeHabits.createdAt));
-    const habitRows = await this.db.select().from(lifeHabitRecords);
+    const habits = await this.db
+      .select()
+      .from(lifeHabits)
+      .where(eq(lifeHabits.createdBy, userId))
+      .orderBy(desc(lifeHabits.createdAt));
+    const habitRows = await this.db
+      .select()
+      .from(lifeHabitRecords)
+      .where(eq(lifeHabitRecords.createdBy, userId));
 
     const heatmapDays = 91;
     const heatmapMap = new Map<string, number>();
@@ -176,10 +185,10 @@ export class InsightsService {
 
     const todayCheckIns = habitRows.filter((r) => r.completed && r.recordDate === todayStr).length;
 
-    // ===== 番茄钟（插件数据：需开启「参与数据分析」才纳入统计）=====
+    // ===== 番茄钟（插件数据：需开启「参与数据分析」才纳入统计，按用户隔离）=====
     const pomoAnalysisEnabled = this.isAnalysisEnabled('dsh-plugin-pomodoro');
     const pomoRows = pomoAnalysisEnabled
-      ? this.pomodoroStore.findAll().filter((r) => !r.abandoned)
+      ? this.pomodoroStore.findAll().filter((r) => r.userId === userId && !r.abandoned)
       : [];
     const pomoDays = 30;
     const pomoMap = new Map<string, number>();
@@ -197,9 +206,9 @@ export class InsightsService {
       .filter((r) => r.completedAt.startsWith(todayStr))
       .reduce((s, r) => s + r.durationMinutes, 0);
 
-    // ===== 时间黑洞（插件数据：需开启「参与数据分析」才纳入统计）=====
+    // ===== 时间黑洞（插件数据：需开启「参与数据分析」才纳入统计，按用户隔离）=====
     const blackholeAnalysisEnabled = this.isAnalysisEnabled('dsh-plugin-time-blackhole');
-    const bhRows = blackholeAnalysisEnabled ? this.blackholeStore.findAll() : [];
+    const bhRows = blackholeAnalysisEnabled ? this.blackholeStore.findAll().filter((r) => r.userId === userId) : [];
     const bhDays = 30;
     const bhMap = new Map<string, number>();
     for (const d of dateRange(bhDays)) bhMap.set(d, 0);
@@ -221,7 +230,11 @@ export class InsightsService {
       .reduce((s, r) => s + r.durationMinutes, 0);
 
     // ===== 目标 =====
-    const goals = await this.db.select().from(lifeGoals).orderBy(desc(lifeGoals.createdAt));
+    const goals = await this.db
+      .select()
+      .from(lifeGoals)
+      .where(eq(lifeGoals.createdBy, userId))
+      .orderBy(desc(lifeGoals.createdAt));
     const goalStats = goals.map((g) => ({
       id: g.id,
       title: g.title,
@@ -230,8 +243,8 @@ export class InsightsService {
       progress: g.progress ?? 0,
     }));
 
-    // ===== 插件数据（需在插件设置中开启「参与数据分析」） =====
-    const pluginStats = await this.buildPluginStats();
+    // ===== 插件数据（需在插件设置中开启「参与数据分析」，按用户隔离） =====
+    const pluginStats = await this.buildPluginStats(userId);
 
     return {
       generatedAt: new Date().toISOString(),

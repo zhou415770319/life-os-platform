@@ -1,7 +1,8 @@
 /**
- * 本地模式登录守卫装饰器
- * 本地文件存储为单用户模式，直接放行；
- * 用户上下文由 LocalUserContextMiddleware 注入（默认 local-user，可用 X-User-Id 请求头覆盖）。
+ * 登录守卫装饰器（兼容保留）。
+ * 真实鉴权已由全局 AuthGuard（server/modules/auth/auth.guard.ts）接管：
+ * 除公开白名单外，所有 /api 请求需 Bearer token（HMAC 校验 + 过期 + 角色分级）。
+ * 本装饰器不再承载拦截逻辑，controller 上的 @NeedLogin() 标注仅为可读性保留。
  */
 export function NeedLogin(): ClassDecorator {
   return (target) => target;

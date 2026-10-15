@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import { NeedLogin } from '../../platform-local/need-login';
 import { ReviewService, type ReviewSettings, type ReviewType } from './review.service';
 
@@ -15,9 +15,12 @@ export class ReviewController {
 
   /** 生成复盘 */
   @Post('generate')
-  generate(@Body() body: { type?: ReviewType; date?: string }) {
+  generate(
+    @Req() req: { userContext: { userId: string } },
+    @Body() body: { type?: ReviewType; date?: string },
+  ) {
     const type: ReviewType = body?.type === 'weekly' ? 'weekly' : 'daily';
-    return this.reviewService.generate(type, body?.date);
+    return this.reviewService.generate(type, body?.date, req.userContext.userId);
   }
 
   /** 历史复盘列表 */

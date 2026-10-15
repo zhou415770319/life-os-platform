@@ -1,10 +1,18 @@
+/**
+ * 安装/卸载插件意图识别。
+ * 注意：动词与「插件」之间只允许极短间隔（≤4 个字符），避免长文本中
+ * 「删除……插件」这类跨词误匹配（例如提交插件市场的指令文本里描述含「删除」、
+ * 后文又出现「上传插件文件」时，宽松的 .* 会错误命中为「删除插件」）。
+ */
+const SHORT_GAP = '[\\s\\S]{0,4}';
+
 const INSTALL_PATTERNS = [
-  /安装.*插件/,
-  /启用.*插件/,
-  /加载.*插件/,
-  /开启.*插件/,
-  /装上.*插件/,
-  /把.*插件打开/,
+  new RegExp(`安装${SHORT_GAP}插件`),
+  new RegExp(`启用${SHORT_GAP}插件`),
+  new RegExp(`加载${SHORT_GAP}插件`),
+  new RegExp(`开启${SHORT_GAP}插件`),
+  new RegExp(`装上${SHORT_GAP}插件`),
+  /把[\s\S]{0,10}插件打开/,
   /安装儿童资料站/,
   /安装RPA/,
   /安装 rpa/,
@@ -17,12 +25,12 @@ const INSTALL_PATTERNS = [
 ];
 
 const UNINSTALL_PATTERNS = [
-  /卸载.*插件/,
-  /禁用.*插件/,
-  /关闭.*插件/,
-  /移除.*插件/,
-  /删掉.*插件/,
-  /删除.*插件/,
+  new RegExp(`卸载${SHORT_GAP}插件`),
+  new RegExp(`禁用${SHORT_GAP}插件`),
+  new RegExp(`关闭${SHORT_GAP}插件`),
+  new RegExp(`移除${SHORT_GAP}插件`),
+  new RegExp(`删掉${SHORT_GAP}插件`),
+  new RegExp(`删除${SHORT_GAP}插件`),
   /卸载儿童资料站/,
   /卸载RPA/,
   /卸载 rpa/,

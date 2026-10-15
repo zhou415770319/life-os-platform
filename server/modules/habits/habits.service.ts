@@ -1,7 +1,7 @@
 ﻿import { Inject, Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
-import { eq, ne, like, ilike, and, or, desc, asc, count, gte, lte, gt, lt, sql } from '@server/storage/drizzle-compat';
+import { eq, and, desc, count, gte } from '@server/storage/drizzle-compat';
 import type {
   LifeHabit,
   HabitRecord,
@@ -52,18 +52,24 @@ export class HabitsService {
     };
   }
 
-  async findAllHabits(page?: number, pageSize?: number): Promise<{ items: LifeHabit[]; total: number }> {
+  // ===== 习惯（按用户隔离） =====
+
+  async findAllHabits(userId: string, page?: number, pageSize?: number): Promise<{ items: LifeHabit[]; total: number }> {
     const size = pageSize ?? 0;
     const pageNum = page ?? 1;
 
-    const query = this.db.select().from(lifeHabits).orderBy(desc(lifeHabits.createdAt));
+    const query = this.db
+      .select()
+      .from(lifeHabits)
+      .where(eq(lifeHabits.createdBy, userId))
+      .orderBy(desc(lifeHabits.createdAt));
     const paginatedQuery = size > 0
       ? query.limit(size).offset((pageNum - 1) * size)
       : query;
 
     const [rows, totalResult] = await Promise.all([
       paginatedQuery,
-      this.db.select({ count: count() }).from(lifeHabits),
+      this.db.select({ count: count() }).from(lifeHabits).where(eq(lifeHabits.createdBy, userId)),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -73,7 +79,7 @@ export class HabitsService {
     return { items, total };
   }
 
-  async createHabit(dto: CreateHabitDto): Promise<LifeHabit> {
+  async createHabit(dto: CreateHabitDto, userId: string): Promise<LifeHabit> {
     const rows = await this.db
       .insert(lifeHabits)
       .values({
@@ -81,6 +87,8 @@ export class HabitsService {
         icon: dto.icon,
         color: dto.color,
         frequency: dto.frequency ?? 'daily',
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -88,27 +96,31 @@ export class HabitsService {
     return this.toHabit(rows[0]);
   }
 
-  async deleteHabit(id: string): Promise<void> {
-    const rows = await this.db.delete(lifeHabits).where(eq(lifeHabits.id, id)).returning({ id: lifeHabits.id });
+  async deleteHabit(id: string, userId: string): Promise<void> {
+    const rows = await this.db
+      .delete(lifeHabits)
+      .where(and(eq(lifeHabits.id, id), eq(lifeHabits.createdBy, userId)))
+      .returning({ id: lifeHabits.id });
     if (rows.length === 0) {
       throw new NotFoundException('习惯不存在');
     }
     this.logger.log(`Habit deleted: ${id}`);
   }
 
-  async updateHabit(id: string, dto: Partial<CreateHabitDto>): Promise<LifeHabit> {
+  async updateHabit(id: string, dto: Partial<CreateHabitDto>, userId: string): Promise<LifeHabit> {
     const patch: Record<string, unknown> = {};
     if (dto.name !== undefined) patch.name = dto.name;
     if (dto.icon !== undefined) patch.icon = dto.icon;
     if (dto.color !== undefined) patch.color = dto.color;
     if (dto.frequency !== undefined) patch.frequency = dto.frequency;
+    patch.updatedBy = userId;
     if (Object.keys(patch).length === 0) {
       throw new BadRequestException('没有需要更新的字段');
     }
     const rows = await this.db
       .update(lifeHabits)
       .set(patch)
-      .where(eq(lifeHabits.id, id))
+      .where(and(eq(lifeHabits.id, id), eq(lifeHabits.createdBy, userId)))
       .returning();
     if (rows.length === 0) {
       throw new NotFoundException('习惯不存在');
@@ -117,14 +129,21 @@ export class HabitsService {
     return this.toHabit(rows[0]);
   }
 
-  async getRecordsByDate(date: string): Promise<{ items: HabitRecord[]; total: number }> {
+  /** 打卡记录：按用户隔离（habit 属于该用户，其记录也属于该用户） */
+  async getRecordsByDate(userId: string, date: string): Promise<{ items: HabitRecord[]; total: number }> {
     if (!date) {
       throw new BadRequestException('日期参数不能为空');
     }
 
     const [rows, totalResult] = await Promise.all([
-      this.db.select().from(lifeHabitRecords).where(eq(lifeHabitRecords.recordDate, date)),
-      this.db.select({ count: count() }).from(lifeHabitRecords).where(eq(lifeHabitRecords.recordDate, date)),
+      this.db
+        .select()
+        .from(lifeHabitRecords)
+        .where(and(eq(lifeHabitRecords.recordDate, date), eq(lifeHabitRecords.createdBy, userId))),
+      this.db
+        .select({ count: count() })
+        .from(lifeHabitRecords)
+        .where(and(eq(lifeHabitRecords.recordDate, date), eq(lifeHabitRecords.createdBy, userId))),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -147,20 +166,35 @@ export class HabitsService {
       .where(eq(lifeHabits.id, habitId));
   }
 
-  async toggleRecord(habitId: string, date: string): Promise<HabitRecord> {
+  async toggleRecord(habitId: string, date: string, userId: string): Promise<HabitRecord> {
     if (!habitId || !date) {
       throw new BadRequestException('habitId 和 date 不能为空');
+    }
+
+    // 习惯归属校验：只能操作自己的习惯
+    const habitRows = await this.db
+      .select({ id: lifeHabits.id })
+      .from(lifeHabits)
+      .where(and(eq(lifeHabits.id, habitId), eq(lifeHabits.createdBy, userId)));
+    if (habitRows.length === 0) {
+      throw new NotFoundException('习惯不存在');
     }
 
     const existing = await this.db
       .select()
       .from(lifeHabitRecords)
-      .where(and(eq(lifeHabitRecords.habitId, habitId), eq(lifeHabitRecords.recordDate, date)));
+      .where(
+        and(
+          eq(lifeHabitRecords.habitId, habitId),
+          eq(lifeHabitRecords.recordDate, date),
+          eq(lifeHabitRecords.createdBy, userId),
+        ),
+      );
 
     if (existing.length > 0) {
       await this.db
         .delete(lifeHabitRecords)
-        .where(eq(lifeHabitRecords.id, existing[0].id));
+        .where(and(eq(lifeHabitRecords.id, existing[0].id), eq(lifeHabitRecords.createdBy, userId)));
       // 取消打卡：简化处理，streak 重置为 0
       await this.updateStreakCount(habitId, 0);
       this.logger.log(`Habit record unchecked: ${habitId} on ${date}`);
@@ -173,6 +207,8 @@ export class HabitsService {
         habitId,
         recordDate: date,
         completed: true,
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -185,15 +221,14 @@ export class HabitsService {
         and(
           eq(lifeHabitRecords.habitId, habitId),
           eq(lifeHabitRecords.recordDate, yesterdayStr),
+          eq(lifeHabitRecords.createdBy, userId),
         ),
       );
 
-    const habitRows = await this.db
+    const currentStreak = habitRows[0]?.id ? (await this.db
       .select({ streakCount: lifeHabits.streakCount })
       .from(lifeHabits)
-      .where(eq(lifeHabits.id, habitId));
-
-    const currentStreak = habitRows[0]?.streakCount ?? 0;
+      .where(eq(lifeHabits.id, habitId)))[0]?.streakCount ?? 0 : 0;
     const newStreak = yesterdayRecords.length > 0 ? currentStreak + 1 : 1;
     await this.updateStreakCount(habitId, newStreak);
 
@@ -201,7 +236,9 @@ export class HabitsService {
     return this.toHabitRecord(rows[0]);
   }
 
-  async getEnergyRecords(): Promise<{ items: EnergyRecord[]; total: number }> {
+  // ===== 能量记录（按用户隔离） =====
+
+  async getEnergyRecords(userId: string): Promise<{ items: EnergyRecord[]; total: number }> {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
@@ -210,12 +247,12 @@ export class HabitsService {
       this.db
         .select()
         .from(lifeEnergyRecords)
-        .where(gte(lifeEnergyRecords.recordDate, thirtyDaysAgoStr))
+        .where(and(gte(lifeEnergyRecords.recordDate, thirtyDaysAgoStr), eq(lifeEnergyRecords.createdBy, userId)))
         .orderBy(desc(lifeEnergyRecords.recordDate)),
       this.db
         .select({ count: count() })
         .from(lifeEnergyRecords)
-        .where(gte(lifeEnergyRecords.recordDate, thirtyDaysAgoStr)),
+        .where(and(gte(lifeEnergyRecords.recordDate, thirtyDaysAgoStr), eq(lifeEnergyRecords.createdBy, userId))),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -225,7 +262,7 @@ export class HabitsService {
     return { items, total };
   }
 
-  async createEnergyRecord(dto: CreateEnergyDto): Promise<EnergyRecord> {
+  async createEnergyRecord(dto: CreateEnergyDto, userId: string): Promise<EnergyRecord> {
     const rows = await this.db
       .insert(lifeEnergyRecords)
       .values({
@@ -234,6 +271,8 @@ export class HabitsService {
         focusLevel: dto.focusLevel,
         mood: dto.mood,
         note: dto.note,
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -241,4 +280,3 @@ export class HabitsService {
     return this.toEnergyRecord(rows[0]);
   }
 }
-

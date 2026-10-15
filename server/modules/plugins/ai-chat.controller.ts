@@ -31,10 +31,10 @@ export class AiChatController {
     return this.aiChatService.getMethods();
   }
 
-  /** AI 深度助手：实时数据快照（前端展示参考面板） */
+  /** AI 深度助手：实时数据快照（前端展示参考面板，按当前用户） */
   @Get('context')
-  async getDeepContext() {
-    return this.aiChatService.buildDataSnapshot();
+  async getDeepContext(@Req() req: { userContext: { userId: string } }) {
+    return this.aiChatService.buildDataSnapshot(req.userContext.userId);
   }
 
   /** AI 长期记忆 */

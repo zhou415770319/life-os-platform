@@ -28,12 +28,15 @@ export class ChildResourcesController {
   constructor(private readonly childResourcesService: ChildResourcesService) {}
 
   @Get('categories/list')
-  async getCategories(): Promise<{ items: string[] }> {
-    return this.childResourcesService.getCategories();
+  async getCategories(
+    @Req() req: { userContext: { userId: string } },
+  ): Promise<{ items: string[] }> {
+    return this.childResourcesService.getCategories(req.userContext.userId);
   }
 
   @Get()
   async findAll(
+    @Req() req: { userContext: { userId: string } },
     @Query('category') category?: string,
     @Query('search') search?: string,
     @Query('resourceType') resourceType?: string,
@@ -46,12 +49,15 @@ export class ChildResourcesController {
       resourceType,
       page: parseInt(page, 10) || 1,
       pageSize: parseInt(pageSize, 10) || 20,
-    });
+    }, req.userContext.userId);
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string): Promise<ChildResource> {
-    return this.childResourcesService.findOne(id);
+  async findOne(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<ChildResource> {
+    return this.childResourcesService.findOne(id, req.userContext.userId);
   }
 
   @Post()
@@ -74,8 +80,11 @@ export class ChildResourcesController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ success: boolean }> {
-    return this.childResourcesService.remove(id);
+  async remove(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<{ success: boolean }> {
+    return this.childResourcesService.remove(id, req.userContext.userId);
   }
 }
 

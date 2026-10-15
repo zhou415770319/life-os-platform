@@ -154,10 +154,11 @@ export class FinanceService {
 
   // ===== Accounts =====
 
-  async getAccounts(): Promise<FinanceAccount[]> {
+  async getAccounts(userId: string): Promise<FinanceAccount[]> {
     const rows = await this.db
       .select()
       .from(lifeFinanceAccounts)
+      .where(eq(lifeFinanceAccounts.createdBy, userId))
       .orderBy(desc(lifeFinanceAccounts.createdAt));
 
     return rows.map((row) => this.mapAccount(row));
@@ -223,7 +224,7 @@ export class FinanceService {
     const [row] = await this.db
       .update(lifeFinanceAccounts)
       .set(patch)
-      .where(eq(lifeFinanceAccounts.id, id))
+      .where(and(eq(lifeFinanceAccounts.id, id), eq(lifeFinanceAccounts.createdBy, userId)))
       .returning();
 
     if (!row) {
@@ -234,10 +235,10 @@ export class FinanceService {
     return this.mapAccount(row);
   }
 
-  async deleteAccount(id: string): Promise<{ success: boolean }> {
+  async deleteAccount(id: string, userId: string): Promise<{ success: boolean }> {
     const deleted = await this.db
       .delete(lifeFinanceAccounts)
-      .where(eq(lifeFinanceAccounts.id, id))
+      .where(and(eq(lifeFinanceAccounts.id, id), eq(lifeFinanceAccounts.createdBy, userId)))
       .returning({ id: lifeFinanceAccounts.id });
 
     if (deleted.length === 0) {
@@ -250,10 +251,10 @@ export class FinanceService {
 
   // ===== Transactions =====
 
-  async getTransactions(query: TransactionListQuery): Promise<ListResponse<FinanceTransaction>> {
+  async getTransactions(query: TransactionListQuery, userId: string): Promise<ListResponse<FinanceTransaction>> {
     const { type, category, accountId, startDate, endDate, page, pageSize } = query;
 
-    const conditions = [];
+    const conditions: any[] = [eq(lifeFinanceTransactions.createdBy, userId)];
     if (type) {
       conditions.push(eq(lifeFinanceTransactions.type, type));
     }
@@ -272,7 +273,7 @@ export class FinanceService {
       conditions.push(lte(lifeFinanceTransactions.transactionDate, endDate));
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [countResult, rows] = await Promise.all([
       this.db
@@ -297,11 +298,11 @@ export class FinanceService {
     return { items, total };
   }
 
-  async getTransaction(id: string): Promise<FinanceTransaction> {
+  async getTransaction(id: string, userId: string): Promise<FinanceTransaction> {
     const rows = await this.db
       .select()
       .from(lifeFinanceTransactions)
-      .where(eq(lifeFinanceTransactions.id, id))
+      .where(and(eq(lifeFinanceTransactions.id, id), eq(lifeFinanceTransactions.createdBy, userId)))
       .limit(1);
 
     if (rows.length === 0) {
@@ -398,11 +399,11 @@ export class FinanceService {
 
     if (needsBalanceUpdate) {
       updatedRow = await this.db.transaction(async (tx) => {
-        // 1. 查询原交易
+        // 1. 查询原交易（归属校验）
         const existing = await tx
           .select()
           .from(lifeFinanceTransactions)
-          .where(eq(lifeFinanceTransactions.id, id))
+          .where(and(eq(lifeFinanceTransactions.id, id), eq(lifeFinanceTransactions.createdBy, userId)))
           .limit(1);
 
         if (existing.length === 0) {
@@ -419,7 +420,7 @@ export class FinanceService {
         const [row] = await tx
           .update(lifeFinanceTransactions)
           .set(patch)
-          .where(eq(lifeFinanceTransactions.id, id))
+          .where(and(eq(lifeFinanceTransactions.id, id), eq(lifeFinanceTransactions.createdBy, userId)))
           .returning();
 
         if (!row) {
@@ -444,7 +445,7 @@ export class FinanceService {
       const [row] = await this.db
         .update(lifeFinanceTransactions)
         .set(patch)
-        .where(eq(lifeFinanceTransactions.id, id))
+        .where(and(eq(lifeFinanceTransactions.id, id), eq(lifeFinanceTransactions.createdBy, userId)))
         .returning();
 
       if (!row) {
@@ -457,13 +458,13 @@ export class FinanceService {
     return this.mapTransaction(updatedRow);
   }
 
-  async deleteTransaction(id: string): Promise<{ success: boolean }> {
+  async deleteTransaction(id: string, userId: string): Promise<{ success: boolean }> {
     const deleted = await this.db.transaction(async (tx) => {
-      // 1. 查询原交易
+      // 1. 查询原交易（归属校验）
       const existing = await tx
         .select()
         .from(lifeFinanceTransactions)
-        .where(eq(lifeFinanceTransactions.id, id))
+        .where(and(eq(lifeFinanceTransactions.id, id), eq(lifeFinanceTransactions.createdBy, userId)))
         .limit(1);
 
       if (existing.length === 0) {
@@ -476,7 +477,7 @@ export class FinanceService {
       // 3. 删除交易
       const result = await tx
         .delete(lifeFinanceTransactions)
-        .where(eq(lifeFinanceTransactions.id, id))
+        .where(and(eq(lifeFinanceTransactions.id, id), eq(lifeFinanceTransactions.createdBy, userId)))
         .returning({ id: lifeFinanceTransactions.id });
 
       return result;
@@ -488,10 +489,11 @@ export class FinanceService {
 
   // ===== Budgets =====
 
-  async getBudgets(): Promise<FinanceBudget[]> {
+  async getBudgets(userId: string): Promise<FinanceBudget[]> {
     const rows = await this.db
       .select()
       .from(lifeFinanceBudgets)
+      .where(eq(lifeFinanceBudgets.createdBy, userId))
       .orderBy(desc(lifeFinanceBudgets.createdAt));
 
     return rows.map((row) => this.mapBudget(row));
@@ -545,7 +547,7 @@ export class FinanceService {
     const [row] = await this.db
       .update(lifeFinanceBudgets)
       .set(patch)
-      .where(eq(lifeFinanceBudgets.id, id))
+      .where(and(eq(lifeFinanceBudgets.id, id), eq(lifeFinanceBudgets.createdBy, userId)))
       .returning();
 
     if (!row) {
@@ -556,10 +558,10 @@ export class FinanceService {
     return this.mapBudget(row);
   }
 
-  async deleteBudget(id: string): Promise<{ success: boolean }> {
+  async deleteBudget(id: string, userId: string): Promise<{ success: boolean }> {
     const deleted = await this.db
       .delete(lifeFinanceBudgets)
-      .where(eq(lifeFinanceBudgets.id, id))
+      .where(and(eq(lifeFinanceBudgets.id, id), eq(lifeFinanceBudgets.createdBy, userId)))
       .returning({ id: lifeFinanceBudgets.id });
 
     if (deleted.length === 0) {
@@ -572,7 +574,7 @@ export class FinanceService {
 
   // ===== Summary =====
 
-  async getSummary(month: string): Promise<FinanceSummary> {
+  async getSummary(month: string, userId: string): Promise<FinanceSummary> {
     // 计算月度范围
     const startDate = `${month}-01`;
     const [yearStr, monthStr] = month.split('-');
@@ -591,6 +593,7 @@ export class FinanceService {
       .from(lifeFinanceTransactions)
       .where(
         and(
+          eq(lifeFinanceTransactions.createdBy, userId),
           gte(lifeFinanceTransactions.transactionDate, startDate),
           lt(lifeFinanceTransactions.transactionDate, endDate),
         ),
@@ -616,6 +619,7 @@ export class FinanceService {
       .from(lifeFinanceTransactions)
       .where(
         and(
+          eq(lifeFinanceTransactions.createdBy, userId),
           eq(lifeFinanceTransactions.type, 'expense'),
           gte(lifeFinanceTransactions.transactionDate, startDate),
           lt(lifeFinanceTransactions.transactionDate, endDate),
@@ -636,6 +640,7 @@ export class FinanceService {
       .from(lifeFinanceBudgets)
       .where(
         and(
+          eq(lifeFinanceBudgets.createdBy, userId),
           eq(lifeFinanceBudgets.period, 'monthly'),
           eq(lifeFinanceBudgets.periodKey, month),
         ),
@@ -650,6 +655,7 @@ export class FinanceService {
           .from(lifeFinanceTransactions)
           .where(
             and(
+              eq(lifeFinanceTransactions.createdBy, userId),
               eq(lifeFinanceTransactions.type, 'expense'),
               eq(lifeFinanceTransactions.category, budget.category),
               gte(lifeFinanceTransactions.transactionDate, startDate),

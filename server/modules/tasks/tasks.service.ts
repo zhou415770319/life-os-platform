@@ -63,10 +63,10 @@ export class TasksService {
     };
   }
 
-  async findAll(query: ListQuery): Promise<ListResponse<LifeTask>> {
+  async findAll(query: ListQuery, userId: string): Promise<ListResponse<LifeTask>> {
     const { status, priority, quadrant, project, search, page, pageSize } = query;
 
-    const conditions = [];
+    const conditions = [eq(lifeTasks.createdBy, userId)];
     if (status) {
       conditions.push(eq(lifeTasks.status, status));
     }
@@ -84,7 +84,7 @@ export class TasksService {
       conditions.push(ilike(lifeTasks.title, searchPattern));
     }
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    const whereClause = and(...conditions);
 
     const [countResult, rows] = await Promise.all([
       this.db
@@ -106,11 +106,11 @@ export class TasksService {
     return { items, total };
   }
 
-  async findOne(id: string): Promise<LifeTask> {
+  async findOne(id: string, userId: string): Promise<LifeTask> {
     const rows = await this.db
       .select()
       .from(lifeTasks)
-      .where(eq(lifeTasks.id, id))
+      .where(and(eq(lifeTasks.id, id), eq(lifeTasks.createdBy, userId)))
       .limit(1);
 
     if (rows.length === 0) {
@@ -148,7 +148,7 @@ export class TasksService {
     dto: UpdateTaskDto,
     userId: string,
   ): Promise<LifeTask> {
-    const before = await this.findOne(id);
+    const before = await this.findOne(id, userId);
     const patch: Partial<typeof lifeTasks.$inferInsert> = {};
     if (dto.title !== undefined) patch.title = dto.title;
     if (dto.description !== undefined) patch.description = dto.description;
@@ -173,7 +173,7 @@ export class TasksService {
     const [row] = await this.db
       .update(lifeTasks)
       .set(patch)
-      .where(eq(lifeTasks.id, id))
+      .where(and(eq(lifeTasks.id, id), eq(lifeTasks.createdBy, userId)))
       .returning();
 
     if (!row) {
@@ -188,7 +188,7 @@ export class TasksService {
           eventCategory: 'tasks',
           contentSummary: `完成任务：${row.title}`,
           metadata: { taskId: id },
-        });
+        }, userId);
       } catch (err) {
         this.logger.warn(`Append task_completed log failed: ${String(err)}`);
       }
@@ -198,10 +198,10 @@ export class TasksService {
     return this.mapRowToTask(row);
   }
 
-  async remove(id: string): Promise<{ success: boolean }> {
+  async remove(id: string, userId: string): Promise<{ success: boolean }> {
     const deleted = await this.db
       .delete(lifeTasks)
-      .where(eq(lifeTasks.id, id))
+      .where(and(eq(lifeTasks.id, id), eq(lifeTasks.createdBy, userId)))
       .returning({ id: lifeTasks.id });
 
     if (deleted.length === 0) {
@@ -212,7 +212,7 @@ export class TasksService {
     return { success: true };
   }
 
-  async getStatsSummary(): Promise<TaskStatsSummary> {
+  async getStatsSummary(userId: string): Promise<TaskStatsSummary> {
     // 各状态数量
     const statusRows = await this.db
       .select({
@@ -220,6 +220,7 @@ export class TasksService {
         count: count(),
       })
       .from(lifeTasks)
+      .where(eq(lifeTasks.createdBy, userId))
       .groupBy(lifeTasks.status);
 
     const statusCounts: Record<string, number> = {};
@@ -234,7 +235,7 @@ export class TasksService {
         count: count(),
       })
       .from(lifeTasks)
-      .where(sql`${lifeTasks.quadrant} is not null`)
+      .where(and(eq(lifeTasks.createdBy, userId), sql`${lifeTasks.quadrant} is not null`))
       .groupBy(lifeTasks.quadrant);
 
     const quadrantCounts: Record<string, number> = {};
@@ -250,6 +251,7 @@ export class TasksService {
       .from(lifeTasks)
       .where(
         and(
+          eq(lifeTasks.createdBy, userId),
           eq(lifeTasks.status, 'done'),
           sql`${lifeTasks.updatedAt}::date = CURRENT_DATE`,
         ),
@@ -265,8 +267,8 @@ export class TasksService {
   }
 
   /** GTD 联动：各任务的番茄专注统计（次数/分钟） */
-  getFocusStats(): Record<string, { count: number; minutes: number }> {
-    return this.pomodoroService.getFocusStatsByTask();
+  getFocusStats(userId: string): Record<string, { count: number; minutes: number }> {
+    return this.pomodoroService.getFocusStatsByTask(userId);
   }
 }
 

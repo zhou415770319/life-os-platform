@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 
-import { AppContainer } from '@lark-apaas/client-toolkit/components/AppContainer';
+import { AppContainer } from './components/providers/app-container';
 
 import RoutesComponent from './app.tsx';
 import './index.css';
@@ -68,7 +68,7 @@ function AppErrorFallback({
 const MainApp = () => {
   return (
     <BrowserRouter basename={CLIENT_BASE_PATH}>
-      <AppContainer defaultTheme="light">
+      <AppContainer>
         <ErrorBoundary
           fallbackRender={AppErrorFallback}
           onError={(error, info) => {

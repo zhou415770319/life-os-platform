@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
 import { NeedLogin } from '../../platform-local/need-login';
+import { Roles } from '../auth/roles.decorator';
 import type { Request, Response } from 'express';
 import { DataManagerService } from './data-manager.service';
 import type {
@@ -11,6 +12,7 @@ import type {
 } from '@shared/api.interface';
 
 @NeedLogin()
+@Roles('admin')
 @Controller('api/data-manager')
 export class DataManagerController {
   constructor(private readonly dataManagerService: DataManagerService) {}

@@ -120,10 +120,10 @@ export class AiChatService {
       });
   }
 
-  /** 构建数据快照（供深度助手参考） */
-  async buildDataSnapshot(): Promise<Record<string, unknown>> {
-    const summary = await this.insightsService.getSummary();
-    const tasks = await this.tasksService.findAll({ page: 1, pageSize: 20 });
+  /** 构建数据快照（供深度助手参考，按当前用户隔离） */
+  async buildDataSnapshot(userId: string): Promise<Record<string, unknown>> {
+    const summary = await this.insightsService.getSummary(userId);
+    const tasks = await this.tasksService.findAll({ page: 1, pageSize: 20 }, userId);
 
     const habitLines = summary.habitStats
       .map((h) => `- ${h.icon ?? ''} ${h.name}：累计 ${h.totalCheckIns} 次，连续 ${h.streakCount} 天`)
@@ -165,9 +165,9 @@ export class AiChatService {
   }
 
   /** 构建深度上下文文本（注入 system prompt） */
-  async buildDeepContextText(): Promise<string> {
+  async buildDeepContextText(userId: string): Promise<string> {
     try {
-      const snapshot = await this.buildDataSnapshot();
+      const snapshot = await this.buildDataSnapshot(userId);
       return [
         '## 用户实时数据（仅供参考，若用户询问状态/分析/建议，请基于以下数据回答）',
         `今天日期：${snapshot.date}`,
@@ -228,7 +228,7 @@ export class AiChatService {
 
     // AI 深度助手：注入长期记忆 + 实时数据快照
     const memoryBlock = this.buildMemoryBlock();
-    const deepBlock = dto.deepMode ? await this.buildDeepContextText() : '';
+    const deepBlock = dto.deepMode ? await this.buildDeepContextText(userId) : '';
     const systemPrompt = [basePrompt, memoryBlock, deepBlock].filter(Boolean).join('\n\n');
 
     const userQuestion = this.buildUserQuestion(dto.messages);

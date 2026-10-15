@@ -137,9 +137,9 @@ export class PluginMethodRegistry {
         { name: 'id', type: 'string', required: true, description: '要删除的资料ID，必填' },
       ],
       dangerous: true,
-    }, async (args) => {
+    }, async (args, userId) => {
       const id = String(args.id ?? '');
-      return this.childResourcesService.remove(id);
+      return this.childResourcesService.remove(id, userId);
     });
 
     this.register({
@@ -153,13 +153,13 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       return this.childResourcesService.findAll({
         category: args.category ? String(args.category) : undefined,
         search: args.keyword ? String(args.keyword) : undefined,
         page: args.page ? Number(args.page) : 1,
         pageSize: args.pageSize ? Number(args.pageSize) : 20,
-      });
+      }, userId);
     });
   }
 
@@ -200,7 +200,7 @@ export class PluginMethodRegistry {
         milestones,
         progress: args.progress !== undefined ? Number(args.progress) : undefined,
         status: args.status ? String(args.status) as 'active' | 'completed' | 'archived' : undefined,
-      });
+      }, userId);
     });
 
     this.register({
@@ -227,7 +227,7 @@ export class PluginMethodRegistry {
       if (rest.deadline !== undefined) patch.deadline = String(rest.deadline);
       if (rest.progress !== undefined) patch.progress = Number(rest.progress);
       if (rest.status !== undefined) patch.status = String(rest.status);
-      return this.goalsService.update(id, patch as Parameters<typeof this.goalsService.update>[1]);
+      return this.goalsService.update(id, patch as Parameters<typeof this.goalsService.update>[1], userId);
     });
 
     this.register({
@@ -239,9 +239,9 @@ export class PluginMethodRegistry {
         { name: 'id', type: 'string', required: true, description: '要删除的目标ID，必填' },
       ],
       dangerous: true,
-    }, async (args) => {
+    }, async (args, userId) => {
       const id = String(args.id ?? '');
-      await this.goalsService.remove(id);
+      await this.goalsService.remove(id, userId);
       return { success: true, message: '目标已删除' };
     });
 
@@ -256,10 +256,10 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
-      const result = await this.goalsService.findAll(page, pageSize);
+      const result = await this.goalsService.findAll(userId, page, pageSize);
       if (args.keyword) {
         const kw = String(args.keyword).toLowerCase();
         result.items = result.items.filter((g) =>
@@ -285,10 +285,10 @@ export class PluginMethodRegistry {
         { name: 'goalId', type: 'string', required: true, description: '目标ID，必填' },
         { name: 'title', type: 'string', required: true, description: '里程碑标题，必填' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const goalId = String(args.goalId ?? '');
       const milestoneTitle = String(args.title ?? '');
-      const goal = await this.goalsService.findOne(goalId);
+      const goal = await this.goalsService.findOne(goalId, userId);
       const currentMilestones = (goal.milestones ?? []) as { id: string; title: string; completed: boolean }[];
       const newMilestone = {
         id: `ms-${Date.now()}`,
@@ -296,7 +296,7 @@ export class PluginMethodRegistry {
         completed: false,
       };
       const updatedMilestones = [...currentMilestones, newMilestone];
-      await this.goalsService.update(goalId, { milestones: updatedMilestones });
+      await this.goalsService.update(goalId, { milestones: updatedMilestones }, userId);
       return { success: true, milestone: newMilestone, totalMilestones: updatedMilestones.length };
     });
   }
@@ -317,13 +317,13 @@ export class PluginMethodRegistry {
         { name: 'color', type: 'string', required: false, description: '习惯颜色，如 #6366f1' },
         { name: 'frequency', type: 'string', required: false, description: '频率，可选值：daily、weekly，默认daily', enum: ['daily', 'weekly'] },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       return this.habitsService.createHabit({
         name: String(args.name ?? ''),
         icon: args.icon ? String(args.icon) : undefined,
         color: args.color ? String(args.color) : undefined,
         frequency: args.frequency ? String(args.frequency) as 'daily' | 'weekly' : 'daily',
-      });
+      }, userId);
     });
 
     this.register({
@@ -335,12 +335,12 @@ export class PluginMethodRegistry {
         { name: 'habitId', type: 'string', required: true, description: '习惯ID，必填' },
         { name: 'date', type: 'string', required: false, description: '打卡日期，格式 YYYY-MM-DD，默认今天' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const habitId = String(args.habitId ?? '');
       const date = args.date
         ? String(args.date)
         : new Date().toISOString().split('T')[0];
-      return this.habitsService.toggleRecord(habitId, date);
+      return this.habitsService.toggleRecord(habitId, date, userId);
     });
 
     this.register({
@@ -370,9 +370,9 @@ export class PluginMethodRegistry {
         { name: 'id', type: 'string', required: true, description: '要删除的习惯ID，必填' },
       ],
       dangerous: true,
-    }, async (args) => {
+    }, async (args, userId) => {
       const id = String(args.id ?? '');
-      await this.habitsService.deleteHabit(id);
+      await this.habitsService.deleteHabit(id, userId);
       return { success: true, message: '习惯已删除' };
     });
 
@@ -385,10 +385,10 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
-      return this.habitsService.findAllHabits(page, pageSize);
+      return this.habitsService.findAllHabits(userId, page, pageSize);
     });
 
     this.register({
@@ -403,7 +403,7 @@ export class PluginMethodRegistry {
         { name: 'note', type: 'string', required: false, description: '备注说明' },
         { name: 'recordDate', type: 'string', required: false, description: '记录日期，格式 YYYY-MM-DD，默认今天' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const recordDate = args.recordDate
         ? String(args.recordDate)
         : new Date().toISOString().split('T')[0];
@@ -413,7 +413,7 @@ export class PluginMethodRegistry {
         focusLevel: args.focusLevel !== undefined ? Number(args.focusLevel) : 5,
         mood: args.mood ? String(args.mood) : undefined,
         note: args.note ? String(args.note) : undefined,
-      });
+      }, userId);
     });
   }
 
@@ -443,7 +443,7 @@ export class PluginMethodRegistry {
         content: args.content ? String(args.content) : '',
         tags: tags.length > 0 ? tags : undefined,
         isPinned: args.pinned !== undefined ? Boolean(args.pinned) : undefined,
-      });
+      }, userId);
     });
 
     this.register({
@@ -469,7 +469,7 @@ export class PluginMethodRegistry {
         patch.tags = tagsStr.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
       }
       if (rest.pinned !== undefined) patch.isPinned = Boolean(rest.pinned);
-      return this.notesService.updateNote(id, patch as Parameters<typeof this.notesService.updateNote>[1]);
+      return this.notesService.updateNote(id, patch as Parameters<typeof this.notesService.updateNote>[1], userId);
     });
 
     this.register({
@@ -481,9 +481,9 @@ export class PluginMethodRegistry {
         { name: 'id', type: 'string', required: true, description: '要删除的笔记ID，必填' },
       ],
       dangerous: true,
-    }, async (args) => {
+    }, async (args, userId) => {
       const id = String(args.id ?? '');
-      await this.notesService.deleteNote(id);
+      await this.notesService.deleteNote(id, userId);
       return { success: true, message: '笔记已删除' };
     });
 
@@ -498,10 +498,10 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
-      const result = await this.notesService.findAllNotes(page, pageSize);
+      const result = await this.notesService.findAllNotes(userId, page, pageSize);
       if (args.tag) {
         const tag = String(args.tag);
         result.items = result.items.filter((n) => n.tags?.includes(tag));
@@ -528,12 +528,12 @@ export class PluginMethodRegistry {
         { name: 'content', type: 'string', required: false, description: '原则详细内容' },
         { name: 'category', type: 'string', required: false, description: '原则分类，如工作、生活、学习、健康等' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       return this.notesService.createPrinciple({
         title: String(args.title ?? ''),
         content: args.content ? String(args.content) : '',
         category: args.category ? String(args.category) : undefined,
-      });
+      }, userId);
     });
 
     this.register({
@@ -547,13 +547,13 @@ export class PluginMethodRegistry {
         { name: 'category', type: 'string', required: false, description: '链接分类，如工具、学习、娱乐等' },
         { name: 'icon', type: 'string', required: false, description: '图标名称' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       return this.notesService.createQuickLink({
         title: String(args.title ?? ''),
         url: String(args.url ?? ''),
         category: args.category ? String(args.category) : undefined,
         icon: args.icon ? String(args.icon) : undefined,
-      });
+      }, userId);
     });
   }
 
@@ -646,9 +646,9 @@ export class PluginMethodRegistry {
         { name: 'id', type: 'string', required: true, description: '要删除的任务ID，必填' },
       ],
       dangerous: true,
-    }, async (args) => {
+    }, async (args, userId) => {
       const id = String(args.id ?? '');
-      return this.tasksService.remove(id);
+      return this.tasksService.remove(id, userId);
     });
 
     this.register({
@@ -662,7 +662,7 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
       return this.tasksService.findAll({
@@ -670,7 +670,7 @@ export class PluginMethodRegistry {
         priority: args.priority ? String(args.priority) : undefined,
         page,
         pageSize,
-      });
+      }, userId);
     });
   }
 
@@ -749,7 +749,7 @@ export class PluginMethodRegistry {
       ],
     }, async (args, userId) => {
       const id = String(args.id ?? '');
-      return this.financeService.deleteTransaction(id);
+      return this.financeService.deleteTransaction(id, userId);
     });
 
     this.register({
@@ -764,7 +764,7 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
       let startDate: string | undefined;
@@ -783,7 +783,7 @@ export class PluginMethodRegistry {
         endDate,
         page,
         pageSize,
-      });
+      }, userId);
     });
 
     this.register({
@@ -952,7 +952,7 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
       const days = args.days !== undefined ? Number(args.days) : 7;
@@ -966,7 +966,7 @@ export class PluginMethodRegistry {
         startDate: startDateStr,
         page,
         pageSize,
-      });
+      }, userId);
 
       if (args.type) {
         const type = String(args.type);
@@ -999,7 +999,7 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
       const days = args.days !== undefined ? Number(args.days) : 7;
@@ -1013,7 +1013,7 @@ export class PluginMethodRegistry {
         startDate: startDateStr,
         page,
         pageSize,
-      });
+      }, userId);
     });
   }
 
@@ -1033,7 +1033,7 @@ export class PluginMethodRegistry {
         { name: 'page', type: 'number', required: false, description: '页码，默认1' },
         { name: 'pageSize', type: 'number', required: false, description: '每页数量，默认20' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const page = args.page ? Number(args.page) : 1;
       const pageSize = args.pageSize ? Number(args.pageSize) : 20;
       const days = args.days !== undefined ? Number(args.days) : 7;
@@ -1047,7 +1047,7 @@ export class PluginMethodRegistry {
         startDate: startDateStr,
         page,
         pageSize,
-      });
+      }, userId);
     });
   }
 
@@ -1469,14 +1469,14 @@ export class PluginMethodRegistry {
         { name: 'completedAt', type: 'string', required: false, description: '完成时间 ISO 字符串，默认当前时间' },
         { name: 'abandoned', type: 'boolean', required: false, description: '是否放弃（未完成），默认 false' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const completedAt = typeof args.completedAt === 'string' ? args.completedAt : new Date().toISOString();
       return this.pomodoroService.createRecord({
         durationMinutes: Number(args.durationMinutes),
         taskName: typeof args.taskName === 'string' ? args.taskName : undefined,
         completedAt,
         abandoned: typeof args.abandoned === 'boolean' ? args.abandoned : undefined,
-      });
+      }, userId);
     });
 
     this.register({
@@ -1485,8 +1485,8 @@ export class PluginMethodRegistry {
       description: '查询番茄钟专注记录列表',
       pluginKey,
       params: [],
-    }, async () => {
-      const records = await this.pomodoroService.getRecords();
+    }, async (_args, userId) => {
+      const records = await this.pomodoroService.getRecords(userId);
       return { items: records, total: records.length };
     });
 
@@ -1496,8 +1496,8 @@ export class PluginMethodRegistry {
       description: '获取番茄钟专注统计（今日专注、累计专注、完成次数等）',
       pluginKey,
       params: [],
-    }, async () => {
-      return this.pomodoroService.getStats();
+    }, async (_args, userId) => {
+      return this.pomodoroService.getStats(userId);
     });
   }
 
@@ -1517,13 +1517,13 @@ export class PluginMethodRegistry {
         { name: 'note', type: 'string', required: false, description: '备注说明' },
         { name: 'recordDate', type: 'string', required: false, description: '记录日期，格式 YYYY-MM-DD，默认今天' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       return this.timeBlackholeService.createRecord({
         category: String(args.category),
         durationMinutes: Number(args.durationMinutes),
         note: typeof args.note === 'string' ? args.note : undefined,
         recordDate: typeof args.recordDate === 'string' ? args.recordDate : undefined,
-      });
+      }, userId);
     });
 
     this.register({
@@ -1534,8 +1534,9 @@ export class PluginMethodRegistry {
       params: [
         { name: 'recordDate', type: 'string', required: false, description: '记录日期，格式 YYYY-MM-DD，默认查询全部' },
       ],
-    }, async (args) => {
+    }, async (args, userId) => {
       const records = await this.timeBlackholeService.getRecords(
+        userId,
         typeof args.recordDate === 'string' ? args.recordDate : undefined,
       );
       return { items: records, total: records.length };
@@ -1547,8 +1548,8 @@ export class PluginMethodRegistry {
       description: '获取浪费时间统计（今日浪费分钟数、累计浪费、分类占比）',
       pluginKey,
       params: [],
-    }, async () => {
-      return this.timeBlackholeService.getStats();
+    }, async (_args, userId) => {
+      return this.timeBlackholeService.getStats(userId);
     });
   }
 
@@ -1668,8 +1669,8 @@ export class PluginMethodRegistry {
       description: '获取人生数据洞察汇总：近91天习惯打卡热力图、近30天番茄专注与时间浪费趋势、目标进度、今日打卡数等',
       pluginKey,
       params: [],
-    }, async () => {
-      return this.insightsService.getSummary();
+    }, async (_args, userId) => {
+      return this.insightsService.getSummary(userId);
     });
   }
 
@@ -1914,8 +1915,8 @@ export class PluginMethodRegistry {
       description: '查询 GTD 任务关联的番茄钟专注统计（每个任务的专注次数与分钟数）',
       pluginKey: 'dsh-plugin-life-dashboard',
       params: [],
-    }, async () => {
-      return this.tasksService.getFocusStats();
+    }, async (_args, userId) => {
+      return this.tasksService.getFocusStats(userId);
     });
   }
 
@@ -1969,7 +1970,7 @@ export class PluginMethodRegistry {
     this.register({
       id: 'child-tv.stop',
       name: '停止播放',
-      description: '停止当前播放内容并解除随播放的自动锁定',
+      description: '停止当前播放内容',
       pluginKey,
       params: [],
     }, async () => {
@@ -1979,34 +1980,11 @@ export class PluginMethodRegistry {
     this.register({
       id: 'child-tv.getStatus',
       name: '查询播放状态',
-      description: '查询儿童定时播放的实时状态（是否播放、当前内容、剩余分钟、下一时段、锁定状态、mpv 是否可用）',
+      description: '查询儿童定时播放的实时状态（是否播放、当前内容、剩余分钟、下一时段、mpv 是否可用）',
       pluginKey,
       params: [],
     }, async () => {
       return this.childTvService.getRuntimeStatus();
-    });
-
-    this.register({
-      id: 'child-tv.lock',
-      name: '锁定电脑',
-      description: '家长远程锁定电脑（键鼠失效，屏幕保持），用于孩子观看期间防止乱动',
-      pluginKey,
-      params: [
-        { name: 'minutes', type: 'number', required: false, description: '锁定时长（分钟），默认 240，最长 1440' },
-      ],
-    }, async (args) => {
-      const minutes = Number(args.minutes) || this.childTvService.readSettings().defaultLockMinutes;
-      return this.childTvService.startLock(minutes, 'manual');
-    });
-
-    this.register({
-      id: 'child-tv.unlock',
-      name: '解锁电脑',
-      description: '解除当前锁定（手动锁与随播放自动锁）',
-      pluginKey,
-      params: [],
-    }, async () => {
-      return this.childTvService.unlock();
     });
 
     this.register({

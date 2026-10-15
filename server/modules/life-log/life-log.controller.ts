@@ -27,21 +27,26 @@ export class LifeLogController {
   constructor(private readonly lifeLogService: LifeLogService) {}
 
   @Get('export')
-  async exportAll(): Promise<{
+  async exportAll(
+    @Req() req: { userContext: { userId: string } },
+  ): Promise<{
     data: LifeLogEntry[];
     exportTime: string;
     total: number;
   }> {
-    return this.lifeLogService.exportAll();
+    return this.lifeLogService.exportAll(req.userContext.userId);
   }
 
   @Get('categories')
-  async getCategories(): Promise<CategoryStat[]> {
-    return this.lifeLogService.getCategoryStats();
+  async getCategories(
+    @Req() req: { userContext: { userId: string } },
+  ): Promise<CategoryStat[]> {
+    return this.lifeLogService.getCategoryStats(req.userContext.userId);
   }
 
   @Get()
   async findAll(
+    @Req() req: { userContext: { userId: string } },
     @Query('eventType') eventType?: string,
     @Query('category') category?: string,
     @Query('startDate') startDate?: string,
@@ -56,16 +61,20 @@ export class LifeLogController {
       endDate,
       page: parseInt(page, 10) || 1,
       pageSize: parseInt(pageSize, 10) || 20,
-    });
+    }, req.userContext.userId);
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string): Promise<LifeLogEntry> {
-    return this.lifeLogService.findOne(id);
+  async findOne(
+    @Req() req: { userContext: { userId: string } },
+    @Param('id') id: string,
+  ): Promise<LifeLogEntry> {
+    return this.lifeLogService.findOne(id, req.userContext.userId);
   }
 
   @Post()
   async create(
+    @Req() req: { userContext: { userId: string } },
     @Body() dto: CreateLifeLogDtoClass,
   ): Promise<LifeLogEntry> {
     return this.lifeLogService.append({
@@ -73,7 +82,6 @@ export class LifeLogController {
       eventCategory: dto.eventCategory as LifeLogCategory,
       contentSummary: dto.contentSummary,
       metadata: dto.metadata,
-    });
+    }, req.userContext.userId);
   }
 }
-

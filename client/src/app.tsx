@@ -3,11 +3,14 @@ import { Route, Routes } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 
 import Layout from './components/Layout';
+import AuthGate from './components/AuthGate';
 import DashboardPage from './pages/Dashboard/DashboardPage';
 import AiChat from './components/AiChat/AiChat';
 import DynamicPluginRoutes from './components/dynamic-plugin-routes';
 import { PluginsProvider } from './hooks/use-plugins';
 import { AppQueryProvider } from './components/providers/query-provider';
+
+const LoginPage = lazy(() => import('./pages/LoginPage/LoginPage'));
 
 const GoalsPage = lazy(() => import('./pages/GoalsPage/GoalsPage'));
 const HabitsPage = lazy(() => import('./pages/HabitsPage/HabitsPage'));
@@ -52,10 +55,25 @@ function PageLoader() {
 const RoutesComponent = () => {
   return (
     <AppQueryProvider>
-      <PluginsProvider>
-        <Suspense fallback={<PageLoader />}>
-          <Routes>
-            <Route element={<Layout />}>
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
+          {/* 登录/注册页（独立布局，无需登录） */}
+          <Route path="/login" element={<LoginPage />} />
+          {/* 儿童观看页：独立布局（无侧边栏、无任何操作入口，只读免登录） */}
+          <Route path="child-tv" element={<ChildTvWatchPage />} />
+          {/* 主应用：全站强制登录（插件上下文 + AI 助手仅登录后加载，避免登录页 401 请求） */}
+          <Route
+            element={
+              <AuthGate>
+                <PluginsProvider>
+                  <>
+                    <Layout />
+                    <AiChat />
+                  </>
+                </PluginsProvider>
+              </AuthGate>
+            }
+          >
               <Route index element={<DashboardPage />} />
               <Route path="goals" element={<GoalsPage />} />
               <Route path="habits" element={<HabitsPage />} />
@@ -77,13 +95,9 @@ const RoutesComponent = () => {
               <Route path="review" element={<ReviewPage />} />
               <Route path="*" element={<DynamicPluginRoutes />} />
             </Route>
-            {/* 儿童观看页：独立布局（无侧边栏、无任何操作入口） */}
-            <Route path="child-tv" element={<ChildTvWatchPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
-        <AiChat />
-      </PluginsProvider>
     </AppQueryProvider>
   );
 };

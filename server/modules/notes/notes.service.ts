@@ -1,7 +1,7 @@
 ﻿import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
-import { eq, ne, like, ilike, and, or, desc, asc, count, gte, lte, gt, lt, sql } from '@server/storage/drizzle-compat';
+import { eq, and, desc, asc, count } from '@server/storage/drizzle-compat';
 import { lifeNotes, lifePrinciples, lifeQuickLinks } from '@server/database/schema';
 import type {
   LifeNote,
@@ -21,13 +21,16 @@ export class NotesService {
     @Inject(LOCAL_DATABASE) private readonly db: LocalDatabase,
   ) {}
 
-  async findAllNotes(page?: number, pageSize?: number): Promise<{ items: LifeNote[]; total: number }> {
+  // ===== 笔记（按用户隔离） =====
+
+  async findAllNotes(userId: string, page?: number, pageSize?: number): Promise<{ items: LifeNote[]; total: number }> {
     const size = pageSize ?? 0;
     const pageNum = page ?? 1;
 
     const query = this.db
       .select()
       .from(lifeNotes)
+      .where(eq(lifeNotes.createdBy, userId))
       .orderBy(desc(lifeNotes.isPinned), desc(lifeNotes.createdAt));
     const paginatedQuery = size > 0
       ? query.limit(size).offset((pageNum - 1) * size)
@@ -35,7 +38,7 @@ export class NotesService {
 
     const [rows, totalResult] = await Promise.all([
       paginatedQuery,
-      this.db.select({ count: count() }).from(lifeNotes),
+      this.db.select({ count: count() }).from(lifeNotes).where(eq(lifeNotes.createdBy, userId)),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -52,7 +55,7 @@ export class NotesService {
     return { items, total };
   }
 
-  async createNote(dto: CreateNoteDto): Promise<LifeNote> {
+  async createNote(dto: CreateNoteDto, userId: string): Promise<LifeNote> {
     const [row] = await this.db
       .insert(lifeNotes)
       .values({
@@ -60,6 +63,8 @@ export class NotesService {
         content: dto.content,
         tags: dto.tags ?? [],
         isPinned: dto.isPinned ?? false,
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -74,17 +79,18 @@ export class NotesService {
     };
   }
 
-  async updateNote(id: string, dto: UpdateNoteDto): Promise<LifeNote> {
+  async updateNote(id: string, dto: UpdateNoteDto, userId: string): Promise<LifeNote> {
     const patch: Partial<typeof lifeNotes.$inferInsert> = {};
     if (dto.title !== undefined) patch.title = dto.title;
     if (dto.content !== undefined) patch.content = dto.content;
     if (dto.tags !== undefined) patch.tags = dto.tags;
     if (dto.isPinned !== undefined) patch.isPinned = dto.isPinned;
+    patch.updatedBy = userId;
 
     const [row] = await this.db
       .update(lifeNotes)
       .set(patch)
-      .where(eq(lifeNotes.id, id))
+      .where(and(eq(lifeNotes.id, id), eq(lifeNotes.createdBy, userId)))
       .returning();
 
     if (!row) {
@@ -102,10 +108,10 @@ export class NotesService {
     };
   }
 
-  async deleteNote(id: string): Promise<void> {
+  async deleteNote(id: string, userId: string): Promise<void> {
     const [deleted] = await this.db
       .delete(lifeNotes)
-      .where(eq(lifeNotes.id, id))
+      .where(and(eq(lifeNotes.id, id), eq(lifeNotes.createdBy, userId)))
       .returning({ id: lifeNotes.id });
 
     if (!deleted) {
@@ -113,13 +119,16 @@ export class NotesService {
     }
   }
 
-  async findAllPrinciples(page?: number, pageSize?: number): Promise<{ items: LifePrinciple[]; total: number }> {
+  // ===== 原则库（按用户隔离） =====
+
+  async findAllPrinciples(userId: string, page?: number, pageSize?: number): Promise<{ items: LifePrinciple[]; total: number }> {
     const size = pageSize ?? 0;
     const pageNum = page ?? 1;
 
     const query = this.db
       .select()
       .from(lifePrinciples)
+      .where(eq(lifePrinciples.createdBy, userId))
       .orderBy(desc(lifePrinciples.createdAt));
     const paginatedQuery = size > 0
       ? query.limit(size).offset((pageNum - 1) * size)
@@ -127,7 +136,7 @@ export class NotesService {
 
     const [rows, totalResult] = await Promise.all([
       paginatedQuery,
-      this.db.select({ count: count() }).from(lifePrinciples),
+      this.db.select({ count: count() }).from(lifePrinciples).where(eq(lifePrinciples.createdBy, userId)),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -143,13 +152,15 @@ export class NotesService {
     return { items, total };
   }
 
-  async createPrinciple(dto: CreatePrincipleDto): Promise<LifePrinciple> {
+  async createPrinciple(dto: CreatePrincipleDto, userId: string): Promise<LifePrinciple> {
     const [row] = await this.db
       .insert(lifePrinciples)
       .values({
         title: dto.title,
         content: dto.content,
         category: dto.category,
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -163,10 +174,10 @@ export class NotesService {
     };
   }
 
-  async deletePrinciple(id: string): Promise<void> {
+  async deletePrinciple(id: string, userId: string): Promise<void> {
     const [deleted] = await this.db
       .delete(lifePrinciples)
-      .where(eq(lifePrinciples.id, id))
+      .where(and(eq(lifePrinciples.id, id), eq(lifePrinciples.createdBy, userId)))
       .returning({ id: lifePrinciples.id });
 
     if (!deleted) {
@@ -174,13 +185,16 @@ export class NotesService {
     }
   }
 
-  async findAllQuickLinks(page?: number, pageSize?: number): Promise<{ items: QuickLink[]; total: number }> {
+  // ===== 快速链接（按用户隔离） =====
+
+  async findAllQuickLinks(userId: string, page?: number, pageSize?: number): Promise<{ items: QuickLink[]; total: number }> {
     const size = pageSize ?? 0;
     const pageNum = page ?? 1;
 
     const query = this.db
       .select()
       .from(lifeQuickLinks)
+      .where(eq(lifeQuickLinks.createdBy, userId))
       .orderBy(asc(lifeQuickLinks.sortOrder));
     const paginatedQuery = size > 0
       ? query.limit(size).offset((pageNum - 1) * size)
@@ -188,7 +202,7 @@ export class NotesService {
 
     const [rows, totalResult] = await Promise.all([
       paginatedQuery,
-      this.db.select({ count: count() }).from(lifeQuickLinks),
+      this.db.select({ count: count() }).from(lifeQuickLinks).where(eq(lifeQuickLinks.createdBy, userId)),
     ]);
 
     const total = Number(totalResult[0]?.count ?? 0);
@@ -204,7 +218,7 @@ export class NotesService {
     return { items, total };
   }
 
-  async createQuickLink(dto: CreateQuickLinkDto): Promise<QuickLink> {
+  async createQuickLink(dto: CreateQuickLinkDto, userId: string): Promise<QuickLink> {
     const [row] = await this.db
       .insert(lifeQuickLinks)
       .values({
@@ -213,6 +227,8 @@ export class NotesService {
         icon: dto.icon,
         category: dto.category,
         sortOrder: dto.sortOrder ?? 0,
+        createdBy: userId,
+        updatedBy: userId,
       })
       .returning();
 
@@ -226,10 +242,10 @@ export class NotesService {
     };
   }
 
-  async deleteQuickLink(id: string): Promise<void> {
+  async deleteQuickLink(id: string, userId: string): Promise<void> {
     const [deleted] = await this.db
       .delete(lifeQuickLinks)
-      .where(eq(lifeQuickLinks.id, id))
+      .where(and(eq(lifeQuickLinks.id, id), eq(lifeQuickLinks.createdBy, userId)))
       .returning({ id: lifeQuickLinks.id });
 
     if (!deleted) {
@@ -237,4 +253,3 @@ export class NotesService {
     }
   }
 }
-

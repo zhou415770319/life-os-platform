@@ -4,6 +4,7 @@ import { InsightsService } from '@server/modules/insights/insights.service';
 import { NotesService } from '@server/modules/notes/notes.service';
 import { LifeLogService } from '@server/modules/life-log/life-log.service';
 import { LocalCapabilityService } from '@server/platform-local/local-capability.service';
+import { LocalUserStore } from '@server/modules/auth/local-user.store';
 
 export type ReviewType = 'daily' | 'weekly';
 
@@ -71,6 +72,7 @@ export class ReviewService implements OnModuleInit {
     category: string;
     durationMinutes: number;
     recordDate: string;
+    userId?: string;
   }>('time-blackhole-records.json');
   private timer: NodeJS.Timeout | null = null;
 
@@ -79,7 +81,13 @@ export class ReviewService implements OnModuleInit {
     private readonly notesService: NotesService,
     private readonly lifeLogService: LifeLogService,
     private readonly capability: LocalCapabilityService,
+    private readonly userStore: LocalUserStore,
   ) {}
+
+  /** 自动定时复盘无用户上下文时，回退到管理员（服务主人）维度 */
+  private resolveAdminUserId(): string {
+    return this.userStore.findAll().find((u) => u.role === 'admin')?.id ?? '';
+  }
 
   onModuleInit(): void {
     // 每 30 秒检查一次提醒/自动生成
@@ -112,9 +120,9 @@ export class ReviewService implements OnModuleInit {
 
   // ===== 数据聚合 =====
 
-  /** 聚合某天数据快照（用于复盘展示与生成） */
-  private async buildSnapshot(dateStr: string, days: 1 | 7) {
-    const summary = await this.insightsService.getSummary();
+  /** 聚合某天数据快照（用于复盘展示与生成，按用户隔离） */
+  private async buildSnapshot(dateStr: string, days: 1 | 7, userId: string) {
+    const summary = await this.insightsService.getSummary(userId);
 
     // 习惯：days=1 取当日；days=7 取近 7 天
     const heatmap = summary.habitHeatmap;
@@ -136,7 +144,7 @@ export class ReviewService implements OnModuleInit {
 
     // 时间黑洞：按 range 日期精确聚合（分钟与分类一致）；需插件开启「参与数据分析」才纳入
     const bhRows = summary.blackholeAnalysisEnabled
-      ? this.blackholeStore.findAll().filter((b) => range.includes(b.recordDate))
+      ? this.blackholeStore.findAll().filter((b) => b.userId === userId && range.includes(b.recordDate))
       : [];
     const wastedMinutes = bhRows.reduce((s, b) => s + b.durationMinutes, 0);
     const bhCatMap = new Map<string, number>();
@@ -151,7 +159,7 @@ export class ReviewService implements OnModuleInit {
     // 笔记：取创建日期匹配的（findAllNotes 无日期筛选，取前 200 条过滤）
     let notesAdded = 0;
     try {
-      const notes = await this.notesService.findAllNotes(1, 200);
+      const notes = await this.notesService.findAllNotes(userId, 1, 200);
       notesAdded = notes.items.filter((n) => n.createdAt.slice(0, 10) === dateStr).length;
     } catch {
       notesAdded = 0;
@@ -167,7 +175,7 @@ export class ReviewService implements OnModuleInit {
         endDate: dateStr,
         page: 1,
         pageSize: 1,
-      });
+      }, userId);
       logEvents = logs.total;
     } catch {
       logEvents = 0;
@@ -201,10 +209,11 @@ export class ReviewService implements OnModuleInit {
 
   // ===== 生成复盘 =====
 
-  async generate(type: ReviewType, dateStr?: string): Promise<ReviewRecord> {
+  async generate(type: ReviewType, dateStr?: string, userId?: string): Promise<ReviewRecord> {
     const target = dateStr || new Date().toISOString().slice(0, 10);
     const days: 1 | 7 = type === 'daily' ? 1 : 7;
-    const stats = await this.buildSnapshot(target, days);
+    const ownerId = userId || this.resolveAdminUserId();
+    const stats = await this.buildSnapshot(target, days, ownerId);
 
     // 1) 尝试 AI 生成个性化总结
     let summary = '';

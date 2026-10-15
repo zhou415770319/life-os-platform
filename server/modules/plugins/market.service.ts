@@ -126,10 +126,28 @@ export class MarketService implements OnModuleInit {
             required: true,
             description: '要提交的插件 key（插件唯一标识，如 reading-notes）',
           },
+          {
+            name: 'version',
+            type: 'string',
+            required: false,
+            description:
+              '本次提交使用的版本号（x.y.z，如 1.2.0）。可选：填写后会同步写回本地 manifest.json，并随插件文件一起提交到市场',
+          },
+          {
+            name: 'description',
+            type: 'string',
+            required: false,
+            description:
+              '本次提交使用的插件描述。可选：填写后会同步写回本地 manifest.json，并随插件文件一起提交到市场',
+          },
         ],
       },
-      async (args) => {
-        return this.submitPlugin(String(args.pluginKey));
+      async (args, userId) => {
+        return this.submitPlugin(String(args.pluginKey), {
+          version: args.version !== undefined ? String(args.version).trim() : undefined,
+          description:
+            args.description !== undefined ? String(args.description).trim() : undefined,
+        }, userId);
       },
     );
 
@@ -255,7 +273,7 @@ export class MarketService implements OnModuleInit {
 
   // ===== 安装 / 卸载 / 更新 =====
 
-  async install(pluginKey: string): Promise<PluginConfig> {
+  async install(pluginKey: string, userId?: string): Promise<PluginConfig> {
     const index = await this.fetchIndex();
     const def = index.plugins.find((p) => p.pluginKey === pluginKey);
     if (!def) {
@@ -360,12 +378,12 @@ export class MarketService implements OnModuleInit {
       eventCategory: 'plugins',
       contentSummary: `从插件市场安装：${manifest.name} v${manifest.version}`,
       metadata: { pluginKey, source: 'market' },
-    });
+    }, userId ?? '');
 
     return this.toPluginConfig(row);
   }
 
-  async uninstall(pluginKey: string): Promise<{ success: boolean }> {
+  async uninstall(pluginKey: string, userId?: string): Promise<{ success: boolean }> {
     const rows = await this.db
       .select()
       .from(lifePluginConfig)
@@ -393,12 +411,12 @@ export class MarketService implements OnModuleInit {
       eventCategory: 'plugins',
       contentSummary: `卸载市场插件：${rows[0].name}`,
       metadata: { pluginKey, source: 'market' },
-    });
+    }, userId ?? '');
 
     return { success: true };
   }
 
-  async update(pluginKey: string): Promise<PluginConfig> {
+  async update(pluginKey: string, userId?: string): Promise<PluginConfig> {
     const index = await this.fetchIndex(true);
     const def = index.plugins.find((p) => p.pluginKey === pluginKey);
     if (!def) {
@@ -465,7 +483,11 @@ export class MarketService implements OnModuleInit {
    * GitHub 凭据来源（按优先级）：环境变量 MARKET_GITHUB_TOKEN / GITHUB_TOKEN
    * → 本机 git 凭据（git credential fill，复用登录 GitHub 的账号）
    */
-  async submitPlugin(pluginKey: string): Promise<Record<string, unknown>> {
+  async submitPlugin(
+    pluginKey: string,
+    opts?: { description?: string; version?: string },
+    userId?: string,
+  ): Promise<Record<string, unknown>> {
     const safeKey = path.basename(pluginKey);
     if (!/^[a-zA-Z0-9_-]{1,60}$/.test(safeKey)) {
       throw new BadRequestException('插件 key 不合法');
@@ -481,6 +503,41 @@ export class MarketService implements OnModuleInit {
     const manifest = this.readManifest(safeKey);
     if (!manifest) {
       throw new BadRequestException(`插件 ${safeKey} 的 manifest.json 缺失或无法解析，无法提交`);
+    }
+
+    // 提交前同步描述/版本：写回本地 manifest.json（后续上传与 PR 内容即更新后的文件）
+    let manifestChanged = false;
+    if (opts?.description !== undefined && opts.description !== manifest.description) {
+      manifest.description = opts.description;
+      manifestChanged = true;
+    }
+    if (opts?.version !== undefined) {
+      if (!/^\d+\.\d+\.\d+$/.test(opts.version)) {
+        throw new BadRequestException('版本号格式应为 x.y.z（如 1.2.0）');
+      }
+      if (opts.version !== manifest.version) {
+        manifest.version = opts.version;
+        manifestChanged = true;
+      }
+    }
+    if (manifestChanged) {
+      fs.writeFileSync(
+        path.join(dir, 'manifest.json'),
+        JSON.stringify(manifest, null, 2),
+        'utf-8',
+      );
+      this.logger.log(
+        `Plugin manifest synced before submit: ${safeKey} -> v${manifest.version}`,
+      );
+      // 同步插件记录（插件中心展示保持一致；内置插件可能无记录，忽略）
+      try {
+        await this.db
+          .update(lifePluginConfig)
+          .set({ version: manifest.version, description: manifest.description })
+          .where(eq(lifePluginConfig.pluginKey, safeKey));
+      } catch {
+        /* 无记录则跳过 */
+      }
     }
 
     // 本地插件根目录下的文件（防穿越：只取 basename）
@@ -605,7 +662,7 @@ export class MarketService implements OnModuleInit {
         eventCategory: 'plugins',
         contentSummary: `提交插件到市场：${manifest.name} v${manifest.version}（PR #${pr.number}）`,
         metadata: { pluginKey: safeKey, branch, prNumber: pr.number, prUrl: pr.html_url },
-      });
+      }, userId ?? '');
 
       return {
         success: true,

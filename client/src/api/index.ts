@@ -1,6 +1,7 @@
 import { logger } from '@lark-apaas/client-toolkit/logger';
 import { axiosForBackend } from '@lark-apaas/client-toolkit/utils/getAxiosForBackend';
 
+export * as authApi from './auth';
 export * as dashboardApi from './dashboard';
 export * as goalsApi from './goals';
 export * as habitsApi from './habits';
@@ -17,4 +18,5 @@ export * as aiSettingsApi from './ai-settings';
 export * as pomodoroApi from './pomodoro';
 export * as timeBlackholeApi from './time-blackhole';
 export * as childTvApi from './child-tv';
+export { CHILD_TV_UNAUTHORIZED_EVENT } from './child-tv';
 export * as marketApi from './market';

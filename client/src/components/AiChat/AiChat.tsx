@@ -388,7 +388,7 @@ const AiChat = () => {
     [activeSessionId, loadSessions, deepMode],
   );
 
-  const sendMessage = useCallback(async (rawText: string) => {
+  const sendMessage = useCallback(async (rawText: string, opts?: { skipIntent?: boolean }) => {
     const text = rawText.trim();
     if (!text || isLoading) return;
 
@@ -401,7 +401,9 @@ const AiChat = () => {
     setInputValue('');
     setIsLoading(true);
 
-    const intent = detectPluginIntent(text);
+    // 系统生成的指令（如插件中心「提交到插件市场」）跳过本地关键词意图拦截，
+    // 避免长文本被误判为「安装/卸载插件」而直接本地执行（应交给 AI 按 system 规则调用对应方法）
+    const intent = opts?.skipIntent ? { action: null, plugin: null } : detectPluginIntent(text);
     if (intent.action && intent.plugin) {
       const enable = intent.action === 'install';
       const success = await togglePlugin(intent.plugin, enable);
@@ -509,11 +511,11 @@ const AiChat = () => {
   // 全局事件：其他页面（如插件中心「提交到市场」）可唤起聊天框并自动发送消息
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ text?: string }>).detail;
+      const detail = (event as CustomEvent<{ text?: string; skipIntent?: boolean }>).detail;
       const text = detail?.text ?? '';
       if (!text.trim()) return;
       setIsOpen(true);
-      sendMessage(text);
+      sendMessage(text, { skipIntent: detail?.skipIntent === true });
     };
     window.addEventListener('life-os:ai-chat:send', handler);
     return () => window.removeEventListener('life-os:ai-chat:send', handler);

@@ -9,6 +9,7 @@ import {
   Put,
 } from '@nestjs/common';
 import { NeedLogin } from '../../platform-local/need-login';
+import { Roles } from '../auth/roles.decorator';
 import { AiSettingsService } from './ai-settings.service';
 import type {
   AiModelAssignments,
@@ -21,6 +22,7 @@ import type {
 } from '@shared/api.interface';
 
 @NeedLogin()
+@Roles('admin')
 @Controller('api/ai-settings')
 export class AiSettingsController {
   constructor(private readonly settingsService: AiSettingsService) {}
