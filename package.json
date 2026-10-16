@@ -11,15 +11,15 @@
   "scripts": {
     "dev": "./scripts/dev.sh",
     "dev:local": "node scripts/dev-win.cjs",
-    "dev:server": "NODE_ENV=development nest start --watch",
-    "dev:client": "NODE_ENV=development vite --config vite.config.ts",
+    "dev:server": "cross-env NODE_ENV=development nest start --watch",
+    "dev:client": "cross-env NODE_ENV=development vite --config vite.config.ts",
     "gen:db-schema": "npx -y @lark-apaas/db-schema-sync@latest --output server/database/schema.ts --export-custom-types",
     "gen:openapi": "echo 'UNSUPPORTED, SKIP'",
     "build": "./scripts/build.sh",
     "build:prod": "npm run build:server && npm run build:client",
-    "build:server": "NODE_ENV=production nest build",
-    "build:client": "NODE_ENV=production vite build --config vite.config.ts",
-    "start": "NODE_ENV=production node dist/server/main.js",
+    "build:server": "cross-env NODE_ENV=production nest build",
+    "build:client": "cross-env NODE_ENV=production vite build --config vite.config.ts",
+    "start": "cross-env NODE_ENV=production node dist/server/main.js",
     "start:prod": "node scripts/start-prod.cjs",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -131,6 +131,7 @@
     "cmdk": "^1.1.1",
     "cobe": "^0.6.5",
     "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
     "css-loader": "^7.1.2",
     "date-fns": "^4.1.0",
     "drizzle-kit": "^0.31.10",
@@ -211,4 +212,3 @@
     "@official-plugins/ai-text-generate": "1.0.21"
   }
 }
-
