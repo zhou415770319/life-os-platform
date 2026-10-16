@@ -32,7 +32,10 @@ export class UrlResolverService {
     try {
       const u = new URL(url);
       const ext = u.pathname.slice(u.pathname.lastIndexOf('.')).toLowerCase();
-      return MEDIA_EXTS.has(ext);
+      if (MEDIA_EXTS.has(ext)) return true;
+      // CDN 签名直链：抖音等 URL 路径无媒体扩展名，但 query 带 mime_type 媒体类型
+      if (/mime_type=video_(mp4|m3u8)/i.test(u.search)) return true;
+      return false;
     } catch {
       return false;
     }

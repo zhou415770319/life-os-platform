@@ -752,10 +752,11 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async expandUrl(url: string): Promise<ChildTvResolveUrlResult> {
-    // 1. 直链判断（媒体扩展名 / m3u8）
+    // 1. 直链判断（媒体扩展名 / m3u8 / CDN 签名直链：抖音等 URL 无扩展名但带 mime_type 参数）
     const pathOnly = url.split(/[?#]/)[0];
     const ext = path.extname(pathOnly).toLowerCase();
-    if (MEDIA_EXTS.has(ext) || ext === '.m3u8') {
+    const isCdnDirect = /mime_type=video_(mp4|m3u8)/i.test(url);
+    if (MEDIA_EXTS.has(ext) || ext === '.m3u8' || isCdnDirect) {
       return { isDirect: true, urls: [url], items: [{ url }], platform: 'direct' };
     }
     // 2. 公共链接解析器：按平台识别 → 平台 provider 解析（抖音/抖音精选/B 站/喜马拉雅/通用兜底）
@@ -1015,14 +1016,15 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
         entries.push({ title: item.title || path.basename(item.value), target: item.value });
       } else if (item.type === 'url') {
         // URL：尝试解析（直链 or 合集页展开）；解析失败仍保留原地址尝试播放
-        // 解析结果带标题（视频名）时用标题命名播放条目，m3u 显示视频名称
+        // 解析结果带标题（视频名）时用标题命名播放条目，m3u 显示视频名称；
+        // 直链等无标题的解析结果，回退使用条目保存的名称（item.title）
         let urls: { url: string; title?: string }[] = [{ url: item.value, title: item.title }];
         try {
           const r = await this.expandUrl(item.value);
           if (r.items?.length) {
-            urls = r.items.map((it) => ({ url: it.url, title: it.title }));
+            urls = r.items.map((it) => ({ url: it.url, title: it.title || item.title }));
           } else if (r.urls?.length) {
-            urls = r.urls.map((u) => ({ url: u }));
+            urls = r.urls.map((u) => ({ url: u, title: item.title }));
           }
           if (!r.isDirect && r.error && r.urls.length === 1) skipped.push(`${item.value}（${r.error}）`);
         } catch {
