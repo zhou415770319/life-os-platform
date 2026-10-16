@@ -12,8 +12,9 @@ import {
   TrendingUp,
   RefreshCcw,
   ChevronDown,
+  Loader2,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { usePlugins } from '@client/src/hooks/use-plugins';
 import { getPluginIcon } from '@client/src/utils/plugin-icons';
 import BackgroundGlow from '@client/src/components/ui/background-glow';
@@ -234,7 +235,16 @@ const Layout = () => {
           <div className="w-9" />
         </div>
         <div className="min-h-full">
-          <Outlet />
+          {/* 页面级 Suspense：切换导航只刷新右侧内容区，左侧导航保持不动 */}
+          <Suspense
+            fallback={
+              <div className="flex min-h-[40vh] items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
         </div>
         {/* 全站免责声明（页脚） */}
         <div className="border-t border-white/5 px-6 py-4">
