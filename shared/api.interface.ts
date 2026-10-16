@@ -201,6 +201,8 @@ export interface AvailablePlugin {
   installed?: boolean;
   /** 当前用户的装载生命周期状态（未装载时为 discovered） */
   lifecycleStatus?: PluginLifecycleStatus;
+  /** 风险等级（系统级能力插件标记 high，安装前提示） */
+  riskLevel?: 'low' | 'medium' | 'high';
   /** 该插件是否支持纳入数据分析（有可聚合的数据） */
   analyzable?: boolean;
   /** 分析维度简短描述 */

@@ -39,6 +39,9 @@ const ReviewPage = lazy(() => import('./pages/ReviewPage/ReviewPage'));
 const ChildTvWatchPage = lazy(
   () => import('./pages/ChildTvWatchPage/ChildTvWatchPage'),
 );
+const ChildTvAdminPage = lazy(
+  () => import('./pages/ChildTvAdminPage/ChildTvAdminPage'),
+);
 const NotFound = lazy(() => import('./pages/NotFound/NotFound'));
 
 function PageLoader() {
@@ -61,6 +64,8 @@ const RoutesComponent = () => {
           <Route path="/login" element={<LoginPage />} />
           {/* 儿童观看页：独立布局（无侧边栏、无任何操作入口，只读免登录） */}
           <Route path="child-tv" element={<ChildTvWatchPage />} />
+          {/* 儿童定时播放家长控制台：免登录（本机共享配置，链接直达即用） */}
+          <Route path="child-tv-admin" element={<ChildTvAdminPage />} />
           {/* 主应用：全站强制登录（插件上下文 + AI 助手仅登录后加载，避免登录页 401 请求） */}
           <Route
             element={

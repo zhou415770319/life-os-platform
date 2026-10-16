@@ -11,14 +11,16 @@ import { AuthService } from './auth.service';
 import { IS_PUBLIC_KEY, ROLES_KEY } from './roles.decorator';
 import { UserRole } from './user-store.interface';
 
-/** 登录接口、儿童电视（独立 child_tv_token 认证体系）、其余全部 /api 需登录 */
+/** 登录接口、儿童电视（免登录：观看页 + 家长控制台 + 其云函数方法）、其余全部 /api 需登录 */
 const PUBLIC_PREFIXES: string[] = [
   '/api/auth/login',
   '/api/auth/register',
   '/api/auth/me',
   '/api/auth/bootstrap',
-  // child-tv 走自身 HMAC token 认证（child_tv_token），家长/儿童独立账号体系
+  // 儿童定时播放：整插件免登录（观看页/家长控制台直接打开即用）
   '/api/child-tv',
+  // child-tv 插件云函数方法（文件/文件夹选择、目录浏览），随插件免登录
+  '/api/plugins/methods/dsh-plugin-child-tv.',
   // 插件 bundle（script 标签加载无法带 Authorization 头），公开静态 JS，放行
   '/api/market/serve',
 ];
@@ -46,8 +48,8 @@ export class AuthGuard implements CanActivate {
     // 静态资源 / 非 API 路径放行
     if (!path.startsWith('/api')) return true;
 
-    // 公开白名单
-    if (PUBLIC_PREFIXES.some((p) => path === p || path.startsWith(p + '/'))) {
+    // 公开白名单（前缀匹配：支持 /api/plugins/methods/dsh-plugin-child-tv.xxx 点号分段）
+    if (PUBLIC_PREFIXES.some((p) => path.startsWith(p))) {
       return true;
     }
 

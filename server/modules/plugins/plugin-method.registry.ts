@@ -1432,9 +1432,10 @@ export class PluginMethodRegistry {
       return handler.execute(args, userId);
     }
 
-    const { items: installedPlugins } = await this.pluginsService.getInstalledPlugins();
-    const isInstalled = installedPlugins.some((p) => p.pluginKey === method.pluginKey && p.lifecycleStatus === 'active');
-    if (!isInstalled) {
+    // 云函数运行时是全局共享的：任一用户启用（countActiveUsers>0）即已加载；
+    // 按全局启用计数校验，而非当前用户（免登录插件如 child-tv 亦可用）
+    const activeUsers = await this.pluginsService.countActiveUsers(method.pluginKey);
+    if (activeUsers <= 0) {
       throw new ForbiddenException(`插件 ${method.pluginKey} 未安装或未启用，无法调用该方法`);
     }
 

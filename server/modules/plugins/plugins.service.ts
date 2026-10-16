@@ -887,7 +887,8 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
   }
 
   /** 全局还有多少用户启用该插件（enabled=true 的装载记录数） */
-  private async countActiveUsers(pluginKey: string): Promise<number> {
+  /** 统计全局启用该插件的用户数（云函数运行时的共享依据） */
+  async countActiveUsers(pluginKey: string): Promise<number> {
     const rows = await this.db
       .select()
       .from(lifePluginInstallations)

@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-  LogOut,
   MonitorPlay,
   MonitorStop,
   Play,
@@ -25,7 +24,7 @@ import {
   Clock,
   FileSearch,
 } from 'lucide-react';
-import { childTvApi, CHILD_TV_UNAUTHORIZED_EVENT } from '@client/src/api';
+import { childTvApi } from '@client/src/api';
 import type {
   ChildTvBrowseResult,
   ChildTvCollection,
@@ -632,9 +631,6 @@ function FilePickerDialog({
 export default function ChildTvAdminPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [token, setToken] = useState<string | null>(childTvApi.getChildTvToken());
-  const [loginName, setLoginName] = useState('admin');
-  const [loginPwd, setLoginPwd] = useState('');
   const [form, setForm] = useState<ScheduleForm>(EMPTY_FORM);
   const [selectedPlayId, setSelectedPlayId] = useState('');
   const [weekFilter, setWeekFilter] = useState<'all' | number>('all');
@@ -656,50 +652,38 @@ export default function ChildTvAdminPage() {
     void queryClient.invalidateQueries({ queryKey: ['child-tv'] });
   }, [queryClient]);
 
-  const { data: auth } = useQuery({
-    queryKey: ['child-tv-me', token],
-    queryFn: childTvApi.childTvMe,
-    enabled: !!token,
-  });
-
-  // ===== 状态 / 时段 / 日志 / 统计 / 设置 =====
+  // ===== 状态 / 时段 / 日志 / 统计 / 设置（免登录，本机共享配置） =====
 
   const { data: status } = useQuery({
-    queryKey: ['child-tv-status', token],
+    queryKey: ['child-tv-status'],
     queryFn: childTvApi.childTvStatus,
-    enabled: !!token,
     refetchInterval: 10_000,
   });
 
   const { data: schedules = [] } = useQuery({
-    queryKey: ['child-tv-schedules', token],
+    queryKey: ['child-tv-schedules'],
     queryFn: childTvApi.childTvListSchedules,
-    enabled: !!token,
   });
 
   const { data: collections = [] } = useQuery({
-    queryKey: ['child-tv-collections', token],
+    queryKey: ['child-tv-collections'],
     queryFn: childTvApi.childTvListCollections,
-    enabled: !!token,
   });
 
   const { data: logs = [] } = useQuery({
-    queryKey: ['child-tv-logs', token],
+    queryKey: ['child-tv-logs'],
     queryFn: childTvApi.childTvLogs,
-    enabled: !!token,
     refetchInterval: 10_000,
   });
 
   const { data: stats = [] } = useQuery({
-    queryKey: ['child-tv-stats', token],
+    queryKey: ['child-tv-stats'],
     queryFn: childTvApi.childTvStats,
-    enabled: !!token,
   });
 
   const { data: settings } = useQuery({
-    queryKey: ['child-tv-settings', token],
+    queryKey: ['child-tv-settings'],
     queryFn: childTvApi.childTvGetSettings,
-    enabled: !!token,
   });
 
   // ===== 打开所在文件夹（支持快捷键 Ctrl+Shift+O） =====
@@ -731,34 +715,6 @@ export default function ChildTvAdminPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [handleOpenDataDir]);
-
-  // ===== 登录 =====
-  const loginMutation = useMutation({
-    mutationFn: () => childTvApi.childTvLogin(loginName, loginPwd),
-    onSuccess: () => {
-      setToken(childTvApi.getChildTvToken());
-      setLoginPwd('');
-      toast.success('登录成功');
-      refresh();
-    },
-    onError: () => toast.error('登录失败，请检查用户名和密码'),
-  });
-
-  const handleLogout = () => {
-    childTvApi.childTvLogout();
-    setToken(null);
-    toast.success('已退出登录');
-  };
-
-  // 登录失效（token 过期/无效）时自动清除本地状态并切回登录界面
-  useEffect(() => {
-    const onUnauthorized = () => {
-      setToken(null);
-      toast.error('登录已过期，请重新登录');
-    };
-    window.addEventListener(CHILD_TV_UNAUTHORIZED_EVENT, onUnauthorized);
-    return () => window.removeEventListener(CHILD_TV_UNAUTHORIZED_EVENT, onUnauthorized);
-  }, []);
 
   // ===== 时段 CRUD =====
   const saveMutation = useMutation({
@@ -934,90 +890,6 @@ export default function ChildTvAdminPage() {
     return schedules.filter((s) => !(s.weekdays?.length) || s.weekdays.includes(weekFilter));
   }, [schedules, weekFilter]);
 
-  // 未登录
-  if (!token) {
-    return (
-      <div className="p-6 md:p-10 min-h-screen relative overflow-hidden">
-        <BackgroundGlow variant="page" />
-        <div className="mx-auto max-w-md pt-16">
-          <Card className="p-8">
-            <div className="mb-6 text-center">
-              <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-500 to-purple-500">
-                <Tv className="h-7 w-7 text-white" />
-              </div>
-              <h2 className="text-xl font-semibold text-zinc-50">家长控制台</h2>
-              <p className="mt-1 text-sm text-zinc-400">儿童定时播放・家长远程控制</p>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-xs text-zinc-400">用户名</label>
-                <input
-                  value={loginName}
-                  onChange={(e) => setLoginName(e.target.value)}
-                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-zinc-400">密码</label>
-                <input
-                  type="password"
-                  value={loginPwd}
-                  onChange={(e) => setLoginPwd(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && loginMutation.mutate()}
-                  className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-                />
-              </div>
-              <Button className="w-full" onClick={() => loginMutation.mutate()} disabled={loginMutation.isPending}>
-                {loginMutation.isPending ? '登录中...' : '登录'}
-              </Button>
-              <p className="text-center text-xs text-zinc-500">默认家长账号 admin / 123456</p>
-            </div>
-            <Link
-              to="/child-tv"
-              className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5 text-sm text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-200"
-            >
-              <Eye className="h-4 w-4" /> 进入儿童观看页
-            </Link>
-          </Card>
-        </div>
-      </div>
-    );
-  }
-
-  // 儿童账号不允许进入控制台（只能看）
-  // 单机模式：仅家长账号（admin）登录控制台，无儿童账号体系
-  if (auth && auth.role === 'child') {
-    return (
-      <div className="p-6 md:p-10 min-h-screen relative overflow-hidden">
-        <BackgroundGlow variant="page" />
-        <div className="mx-auto max-w-md pt-16">
-          <Card className="p-8 text-center">
-            <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-rose-400" />
-            <h2 className="text-lg font-semibold text-zinc-50">这是家长控制台</h2>
-            <p className="mt-2 text-sm text-zinc-400">
-              当前登录的是儿童账号「{auth.username}」，不能进行控制操作。
-              <br />
-              儿童请在观看页使用。
-            </p>
-            <Button
-              variant="outline"
-              className="mt-5"
-              onClick={handleLogout}
-            >
-              <LogOut className="mr-1 h-3.5 w-3.5" /> 退出并重新登录
-            </Button>
-            <Link
-              to="/child-tv"
-              className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-4 py-2.5 text-sm text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-200"
-            >
-              <Eye className="h-4 w-4" /> 进入儿童观看页
-            </Link>
-          </Card>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="p-6 md:p-10 min-h-screen relative overflow-hidden">
       <BackgroundGlow variant="page" />
@@ -1029,7 +901,7 @@ export default function ChildTvAdminPage() {
             <Tv className="h-6 w-6 text-rose-400" /> 儿童定时播放
           </h1>
           <p className="mt-1 text-sm text-zinc-400">
-            家长控制台 · 已登录 {auth?.username}
+            家长控制台 · 免登录（本机共享配置）
             {status?.mpvAvailable
               ? status.mpv === 'running'
                 ? ' · mpv 播放中'
@@ -1046,9 +918,6 @@ export default function ChildTvAdminPage() {
           </Button>
           <Button variant="ghost" size="sm" onClick={refresh}>
             <RefreshCw className="mr-1 h-3.5 w-3.5" /> 刷新
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleLogout}>
-            <LogOut className="mr-1 h-3.5 w-3.5" /> 退出登录
           </Button>
         </div>
       </div>
