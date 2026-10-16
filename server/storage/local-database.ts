@@ -542,8 +542,8 @@ class LocalSelectQuery {
 class LocalInsertQuery {
   private insertValues: Record<string, unknown> | Record<string, unknown>[] = {};
   private conflictMode: 'nothing' | 'update' | null = null;
-  private conflictTarget = 'id';
-  private conflictJsName = 'id';
+  private conflictTargets: string[] = ['id'];
+  private conflictJsNames: string[] = ['id'];
   private conflictSet: Record<string, unknown> = {};
 
   constructor(
@@ -562,20 +562,32 @@ class LocalInsertQuery {
     return this;
   }
 
-  /** 冲突时更新指定列 —— upsert */
+  /** 冲突时更新指定列 —— upsert（target 支持单列或复合列数组） */
   onConflictDoUpdate(opts: {
     target: unknown;
     set: Record<string, unknown>;
   }): this {
     this.conflictMode = 'update';
-    this.conflictTarget = resolveColumnName(opts.target);
+    const targets = Array.isArray(opts.target) ? opts.target : [opts.target];
+    this.conflictTargets = targets.map((t) => resolveColumnName(t));
     // 反查 JS 属性名（values 里用的是 camelCase 键）
-    this.conflictJsName =
-      Object.entries(getColumns(this.table)).find(
-        ([k, m]) => (m.name ?? k) === this.conflictTarget,
-      )?.[0] ?? this.conflictTarget;
+    const cols = getColumns(this.table);
+    this.conflictJsNames = this.conflictTargets.map(
+      (name) =>
+        Object.entries(cols).find(([, m]) => (m.name ?? name) === name)?.[0] ??
+        name,
+    );
     this.conflictSet = opts.set;
     return this;
+  }
+
+  /** 判断行 r 是否命中冲突 target（单列或复合列全部相等） */
+  private conflictMatches(r: Record<string, unknown>, raw: Record<string, unknown>): boolean {
+    return this.conflictTargets.every((_, i) => {
+      const col = this.conflictTargets[i];
+      const js = this.conflictJsNames[i];
+      return valuesEqual(r[col], raw[col] ?? raw[js]);
+    });
   }
 
   async returning(projection?: Record<string, unknown>): Promise<any[]> {
@@ -588,15 +600,12 @@ class LocalInsertQuery {
     const inserted: any[] = [];
 
     for (const raw of list) {
-      const rawKey = raw[this.conflictTarget] ?? raw[this.conflictJsName];
       const exists = rows.some(
-        (r) => this.conflictMode && valuesEqual(r[this.conflictTarget], rawKey),
+        (r) => this.conflictMode && this.conflictMatches(r, raw),
       );
       if (this.conflictMode === 'nothing' && exists) continue;
       if (this.conflictMode === 'update' && exists) {
-        const target = rows.find((r) =>
-          valuesEqual(r[this.conflictTarget], rawKey),
-        );
+        const target = rows.find((r) => this.conflictMatches(r, raw));
         if (target) {
           Object.assign(target, { ...this.conflictSet, updatedAt: new Date() });
           inserted.push(target);

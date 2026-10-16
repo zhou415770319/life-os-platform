@@ -125,7 +125,14 @@ export class AuthService {
   private checkRateLimit(key: string): void {
     const entry = this.rateLimits.get(key);
     if (entry && entry.lockUntil > Date.now()) {
-      throw new UnauthorizedException('尝试次数过多，请 15 分钟后再试');
+      const remainMs = entry.lockUntil - Date.now();
+      const minutes = Math.floor(remainMs / 60_000);
+      const seconds = Math.ceil((remainMs % 60_000) / 1000);
+      const wait =
+        minutes > 0
+          ? `${minutes} 分 ${seconds} 秒`
+          : `${seconds} 秒`;
+      throw new UnauthorizedException(`尝试次数过多，请 ${wait} 后再试`);
     }
   }
 

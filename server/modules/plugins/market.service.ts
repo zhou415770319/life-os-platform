@@ -13,14 +13,15 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
-import { eq } from '@server/storage/drizzle-compat';
-import { lifePluginConfig } from '@server/database/schema';
+import { eq, and } from '@server/storage/drizzle-compat';
+import { lifePluginConfig, lifePluginInstallations } from '@server/database/schema';
 import type {
   PluginConfig,
   PluginCardConfig,
   MarketPluginDef,
   MarketPluginItem,
   PluginMethod,
+  PluginLifecycleStatus,
 } from '@shared/api.interface';
 import { LifeLogService } from '@server/modules/life-log/life-log.service';
 import { PluginMethodRegistry } from './plugin-method.registry';
@@ -156,7 +157,8 @@ export class MarketService implements OnModuleInit {
       let restored = 0;
       for (const row of rows) {
         const cfg = (row.config ?? {}) as Record<string, unknown>;
-        if (cfg.source !== MARKET_SOURCE_TAG || !row.enabled) continue;
+        if (cfg.source !== MARKET_SOURCE_TAG) continue;
+        if (await this.countActiveUsers(row.pluginKey) === 0) continue;
         const manifest = this.readManifest(row.pluginKey);
         if (manifest?.aiMethods?.length) {
           this.registry.registerMarketMethods(
@@ -255,16 +257,31 @@ export class MarketService implements OnModuleInit {
     }
   }
 
-  async listMarketPlugins(force = false): Promise<{ items: MarketPluginItem[]; total: number }> {
+  async listMarketPlugins(
+    force = false,
+    userId?: string,
+  ): Promise<{ items: MarketPluginItem[]; total: number }> {
     const index = await this.fetchIndex(force);
     const rows = await this.db.select().from(lifePluginConfig);
     const rowMap = new Map(rows.map((r) => [r.pluginKey, r]));
+    const installStates = userId
+      ? await this.db
+          .select()
+          .from(lifePluginInstallations)
+          .where(eq(lifePluginInstallations.userId, userId))
+      : [];
+    const stateMap = new Map(
+      installStates
+        .filter((s) => s.enabled || s.lifecycleStatus === 'suspended')
+        .map((s) => [s.pluginKey, s]),
+    );
     const items: MarketPluginItem[] = index.plugins.map((def) => {
       const row = rowMap.get(def.pluginKey);
+      const installed = stateMap.has(def.pluginKey);
       return {
         ...def,
-        installed: !!row && row.enabled,
-        enabled: !!row && row.enabled,
+        installed,
+        enabled: installed,
         installedVersion: row?.version ?? null,
       };
     });
@@ -327,8 +344,7 @@ export class MarketService implements OnModuleInit {
       const updated = await this.db
         .update(lifePluginConfig)
         .set({
-          enabled: true,
-          lifecycleStatus: 'active',
+          // 目录表只维护元数据；enabled/lifecycleStatus 由每个用户的装载表决定
           version: manifest.version,
           name: manifest.name,
           description: manifest.description,
@@ -345,10 +361,10 @@ export class MarketService implements OnModuleInit {
           pluginKey,
           name: manifest.name,
           description: manifest.description,
-          enabled: true,
+          enabled: false,
           version: manifest.version,
           config,
-          lifecycleStatus: 'active',
+          lifecycleStatus: 'discovered',
           riskLevel: 'medium',
           capabilities: ['market-plugin'],
         })
@@ -358,6 +374,30 @@ export class MarketService implements OnModuleInit {
 
     if (!row) {
       throw new NotFoundException('插件记录写入失败');
+    }
+
+    // 按用户装载：当前用户启用该插件（装载表 upsert）
+    if (userId) {
+      const activeBefore = await this.countActiveUsers(pluginKey);
+      await this.db
+        .insert(lifePluginInstallations)
+        .values({
+          userId,
+          pluginKey,
+          enabled: true,
+          lifecycleStatus: 'active',
+          installedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [lifePluginInstallations.userId, lifePluginInstallations.pluginKey],
+          set: { enabled: true, lifecycleStatus: 'active' },
+        });
+      // 仅当该插件此前全局无任何用户装载时，才装载云函数（全局共享一份运行时）
+      if (activeBefore === 0) {
+        await this.pluginRuntime.load(pluginKey);
+      }
+    } else {
+      await this.pluginRuntime.load(pluginKey);
     }
 
     // 注册 AI 方法
@@ -380,7 +420,7 @@ export class MarketService implements OnModuleInit {
       metadata: { pluginKey, source: 'market' },
     }, userId ?? '');
 
-    return this.toPluginConfig(row);
+    return this.toPluginConfig(row, userId);
   }
 
   async uninstall(pluginKey: string, userId?: string): Promise<{ success: boolean }> {
@@ -392,20 +432,32 @@ export class MarketService implements OnModuleInit {
       throw new BadRequestException('该插件不是市场插件，请通过插件中心卸载');
     }
 
-    // 删除插件文件目录（保留数据目录，重装可恢复）
-    const dir = this.pluginDir(pluginKey);
-    if (fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+    // 按用户卸载：移除当前用户的装载记录
+    if (userId) {
+      await this.db
+        .delete(lifePluginInstallations)
+        .where(
+          and(
+            eq(lifePluginInstallations.userId, userId),
+            eq(lifePluginInstallations.pluginKey, pluginKey),
+          ),
+        );
+    } else {
+      // 无用户上下文（历史调用兜底）：清空该插件全部装载记录
+      await this.db
+        .delete(lifePluginInstallations)
+        .where(eq(lifePluginInstallations.pluginKey, pluginKey));
     }
 
-    await this.db
-      .update(lifePluginConfig)
-      .set({ enabled: false, lifecycleStatus: 'unloaded' })
-      .where(eq(lifePluginConfig.pluginKey, pluginKey));
-
-    this.logger.log(`Market plugin uninstalled: ${pluginKey}`);
-    // 注销云函数（文件目录已删除，方法随之移除）
-    await this.pluginRuntime.unload(pluginKey);
+    this.logger.log(`Market plugin uninstalled for user ${userId ?? 'ALL'}: ${pluginKey}`);
+    // 全局已无任何用户装载该插件 → 删除插件文件目录（保留数据目录，重装可恢复）+ 注销云函数
+    if (await this.countActiveUsers(pluginKey) === 0) {
+      const dir = this.pluginDir(pluginKey);
+      if (fs.existsSync(dir)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      await this.pluginRuntime.unload(pluginKey);
+    }
     void this.lifeLogService.append({
       eventType: 'plugin_uninstalled',
       eventCategory: 'plugins',
@@ -468,7 +520,7 @@ export class MarketService implements OnModuleInit {
     await this.pluginRuntime.load(pluginKey);
 
     this.logger.log(`Market plugin updated: ${pluginKey} -> v${manifest.version}`);
-    return this.toPluginConfig(updated[0]);
+    return this.toPluginConfig(updated[0], userId);
   }
 
   // ===== 提交插件到市场（新建分支 + PR，由仓库管理员 review 合并） =====
@@ -816,13 +868,24 @@ export class MarketService implements OnModuleInit {
   }
 
   private async assertMarketPluginEnabled(pluginKey: string): Promise<void> {
-    const rows = await this.db
-      .select()
-      .from(lifePluginConfig)
-      .where(eq(lifePluginConfig.pluginKey, pluginKey));
-    if (rows.length === 0 || !rows[0].enabled) {
+    // 市场插件数据为全局共享：只要有任意用户装载（启用）该插件即可访问
+    if (await this.countActiveUsers(pluginKey) === 0) {
       throw new ForbiddenException(`插件「${pluginKey}」未安装或未启用`);
     }
+  }
+
+  /** 全局还有多少用户启用该插件（enabled=true 的装载记录数） */
+  private async countActiveUsers(pluginKey: string): Promise<number> {
+    const rows = await this.db
+      .select()
+      .from(lifePluginInstallations)
+      .where(
+        and(
+          eq(lifePluginInstallations.pluginKey, pluginKey),
+          eq(lifePluginInstallations.enabled, true),
+        ),
+      );
+    return rows.length;
   }
 
   async getCollection(pluginKey: string, collection: string): Promise<{ items: any[]; total: number }> {
@@ -915,19 +978,34 @@ export class MarketService implements OnModuleInit {
     }
   }
 
-  private toPluginConfig(row: (typeof lifePluginConfig.$inferSelect)): PluginConfig {
+  private async toPluginConfig(
+    row: (typeof lifePluginConfig.$inferSelect),
+    userId?: string,
+  ): Promise<PluginConfig> {
     const cfg = (row.config ?? {}) as Record<string, unknown>;
     const { category, ...rest } = cfg;
     void category;
+    // enabled/lifecycleStatus 取当前用户装载视角（目录表不承载运行状态）
+    const userState = userId
+      ? (await this.db
+          .select()
+          .from(lifePluginInstallations)
+          .where(
+            and(
+              eq(lifePluginInstallations.userId, userId),
+              eq(lifePluginInstallations.pluginKey, row.pluginKey),
+            ),
+          ))[0]
+      : undefined;
     return {
       id: row.id,
       pluginKey: row.pluginKey,
       name: row.name,
       description: row.description,
-      enabled: row.enabled,
+      enabled: userState?.enabled ?? false,
       version: row.version,
       config: (rest as unknown) as PluginCardConfig,
-      lifecycleStatus: (row.lifecycleStatus ?? 'discovered') as PluginConfig['lifecycleStatus'],
+      lifecycleStatus: (userState?.lifecycleStatus ?? 'discovered') as PluginConfig['lifecycleStatus'],
       riskLevel: (row.riskLevel ?? 'low') as PluginConfig['riskLevel'],
       capabilities: Array.isArray(row.capabilities) ? (row.capabilities as string[]) : [],
     };

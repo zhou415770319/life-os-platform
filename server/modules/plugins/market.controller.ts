@@ -8,16 +8,22 @@ import type { PluginConfig, MarketPluginItem } from '@shared/api.interface';
 export class MarketController {
   constructor(private readonly marketService: MarketService) {}
 
-  /** 在线市场插件列表（含已安装状态）；?force=1 强制绕过 10 分钟缓存，拉取最新市场清单 */
+  /** 在线市场插件列表（含当前用户的已安装状态）；?force=1 强制绕过 10 分钟缓存 */
   @Get()
   list(
     @Query('force') force?: string,
+    @Req() req?: Request,
   ): Promise<{ items: MarketPluginItem[]; total: number }> {
-    return this.marketService.listMarketPlugins(force === '1' || force === 'true');
+    const { userContext } = (req ?? {}) as Request & {
+      userContext?: { userId: string };
+    };
+    return this.marketService.listMarketPlugins(
+      force === '1' || force === 'true',
+      userContext?.userId,
+    );
   }
 
-  /** 安装市场插件（管理员） */
-  @Roles('admin')
+  /** 安装市场插件（按当前登录用户装载，无需 admin） */
   @Post('install/:pluginKey')
   install(
     @Req() req: Request,
@@ -27,8 +33,7 @@ export class MarketController {
     return this.marketService.install(pluginKey, userContext.userId);
   }
 
-  /** 卸载市场插件（保留数据，管理员） */
-  @Roles('admin')
+  /** 卸载市场插件（移除当前用户装载；全局无人使用时清理代码文件，保留数据，无需 admin） */
   @Post('uninstall/:pluginKey')
   uninstall(
     @Req() req: Request,
@@ -38,8 +43,7 @@ export class MarketController {
     return this.marketService.uninstall(pluginKey, userContext.userId);
   }
 
-  /** 更新市场插件（管理员） */
-  @Roles('admin')
+  /** 更新市场插件（元数据与代码全局生效） */
   @Post('update/:pluginKey')
   update(
     @Req() req: Request,

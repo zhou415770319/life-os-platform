@@ -17,10 +17,12 @@ import type {
 export class DataManagerController {
   constructor(private readonly dataManagerService: DataManagerService) {}
 
-  /** 可导出选项（核心模块 + 已装载插件） */
+  /** 可导出选项（核心模块 + 当前用户已装载插件） */
   @Get('export/options')
-  async getExportOptions(): Promise<ExportOptionsResult> {
-    return this.dataManagerService.getExportOptions();
+  async getExportOptions(@Req() req: Request): Promise<ExportOptionsResult> {
+    return this.dataManagerService.getExportOptions(
+      (req as Request & { userContext?: { userId: string } }).userContext?.userId,
+    );
   }
 
   /** 按勾选范围导出（v2 格式：模块与插件分组） */

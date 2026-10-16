@@ -199,6 +199,8 @@ export interface AvailablePlugin {
   isCore: boolean;
   config: PluginCardConfig;
   installed?: boolean;
+  /** 当前用户的装载生命周期状态（未装载时为 discovered） */
+  lifecycleStatus?: PluginLifecycleStatus;
   /** 该插件是否支持纳入数据分析（有可聚合的数据） */
   analyzable?: boolean;
   /** 分析维度简短描述 */

@@ -36,16 +36,46 @@ export default function LoginPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (mode === 'register' && password !== password2) {
-      setError('两次输入的密码不一致');
+
+    // ===== 前端校验（与后端规则对齐，减少无效请求） =====
+    const name = username.trim();
+    if (!name) {
+      setError('请输入用户名');
       return;
     }
+    if (name.length < 2 || name.length > 32) {
+      setError('用户名长度需在 2-32 个字符之间');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_\u4e00-\u9fa5-]+$/.test(name)) {
+      setError('用户名仅支持字母、数字、下划线、中文和连字符');
+      return;
+    }
+    if (!password) {
+      setError('请输入密码');
+      return;
+    }
+    if (mode === 'register') {
+      if (password.length < 8) {
+        setError('密码长度至少 8 位');
+        return;
+      }
+      if (password !== password2) {
+        setError('两次输入的密码不一致');
+        return;
+      }
+      if (initialized && !inviteCode.trim()) {
+        setError('新用户注册需要邀请码');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       if (mode === 'login') {
-        await authLogin(username, password);
+        await authLogin(name, password);
       } else {
-        await authRegister(username, password, inviteCode.trim() || undefined);
+        await authRegister(name, password, inviteCode.trim() || undefined);
       }
       navigate(redirect, { replace: true });
     } catch (err) {

@@ -372,6 +372,25 @@ export const lifePluginConfig = pgTable("life_plugin_config", {
   uniqueIndex("life_plugin_config_plugin_key_key").on(table.pluginKey),
 ]);
 
+/**
+ * 插件装载状态（按用户隔离）。
+ * life_plugin_config 只存插件目录/元数据（全局一份）；
+ * 每个用户在该表记录自己的「装载」状态（enabled / lifecycleStatus）。
+ * 新用户无任何装载记录 = 默认不装载任何插件，需自己到插件中心安装。
+ */
+export const lifePluginInstallations = pgTable("life_plugin_installations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: varchar("user_id", { length: 64 }).notNull(),
+  pluginKey: varchar("plugin_key", { length: 255 }).notNull(),
+  enabled: boolean("enabled").notNull().default(false),
+  lifecycleStatus: varchar("lifecycle_status", { length: 20 }).notNull().default('discovered'),
+  installedAt: customTimestamptz("installed_at", { precision: 3 }),
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("life_plugin_installations_user_plugin_key").on(table.userId, table.pluginKey),
+]);
+
 export const lifeQuickLinks = pgTable("life_quick_links", {
   id: uuid("id").primaryKey().defaultRandom(),
   title: varchar("title", { length: 255 }).notNull(),

@@ -13,7 +13,7 @@ import * as path from 'path';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
 import { eq, ne, like, ilike, and, or, desc, asc, count, gte, lte, gt, lt, sql } from '@server/storage/drizzle-compat';
-import { lifePluginConfig } from '@server/database/schema';
+import { lifePluginConfig, lifePluginInstallations } from '@server/database/schema';
 import type {
   PluginConfig,
   UpdatePluginDto,
@@ -25,6 +25,7 @@ import type {
 import { LifeLogService } from '@server/modules/life-log/life-log.service';
 import { PluginRuntimeService } from './plugin-runtime.service';
 import { ChildTvService } from '@server/modules/child-tv/child-tv.service';
+import { LocalUserStore } from '@server/modules/auth/local-user.store';
 
 const CORE_PLUGIN_KEY = 'dsh-plugin-life-dashboard';
 
@@ -306,6 +307,7 @@ export class PluginsService implements OnModuleInit {
     @Inject(LOCAL_DATABASE) private readonly db: LocalDatabase,
     private readonly lifeLogService: LifeLogService,
     private readonly pluginRuntime: PluginRuntimeService,
+    private readonly userStore: LocalUserStore,
     @Optional() private readonly childTvService?: ChildTvService,
   ) {}
 
@@ -318,10 +320,11 @@ export class PluginsService implements OnModuleInit {
             pluginKey: plugin.pluginKey,
             name: plugin.name,
             description: plugin.description,
-            enabled: plugin.enabled,
+            // 目录表不再承载「启用状态」：enabled/lifecycleStatus 由每个用户的装载表决定
+            enabled: false,
             version: plugin.version,
             config: plugin.config as unknown as Record<string, unknown>,
-            lifecycleStatus: plugin.lifecycleStatus,
+            lifecycleStatus: 'discovered',
             riskLevel: plugin.riskLevel,
             capabilities: plugin.capabilities as unknown as string[],
           })
@@ -342,10 +345,54 @@ export class PluginsService implements OnModuleInit {
         this.ensureSeedPluginPackage(plugin);
       }
       this.logger.log(`Plugin seed complete, ${SEED_PLUGINS.length} plugins checked`);
+
+      // 存量迁移：旧版全局 enabled 状态 → 管理员用户的装载表（仅首次、装载表为空时执行）
+      await this.migrateLegacyInstallations();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
       this.logger.error(`Failed to seed plugins: ${message}`, stack);
+    }
+  }
+
+  /**
+   * 存量迁移：life-plugin-config 升级为「目录 + 按用户装载」前，enabled/lifecycleStatus
+   * 是全局单行状态。首次启动时把目录表中 enabled=true 的插件装载到管理员账号下，
+   * 保证老用户（admin）现有装载不丢失；装载表非空则跳过（幂等）。
+   */
+  private async migrateLegacyInstallations(): Promise<void> {
+    try {
+      const existing = await this.db.select().from(lifePluginInstallations);
+      if (existing.length > 0) return; // 已迁移过
+
+      const allUsers = this.userStore.findAll();
+      const admin = allUsers.find((u) => u.role === 'admin') ?? allUsers[0];
+      if (!admin) return;
+
+      const dirRows = await this.db
+        .select()
+        .from(lifePluginConfig)
+        .where(eq(lifePluginConfig.enabled, true));
+      if (dirRows.length === 0) return;
+
+      for (const row of dirRows) {
+        await this.db
+          .insert(lifePluginInstallations)
+          .values({
+            userId: admin.id,
+            pluginKey: row.pluginKey,
+            enabled: true,
+            lifecycleStatus: (row.lifecycleStatus ?? 'active') as PluginLifecycleStatus,
+            installedAt: row.createdAt ?? new Date(),
+          })
+          .onConflictDoNothing();
+      }
+      this.logger.log(
+        `Legacy plugin installations migrated to admin (${admin.username}): ${dirRows.length}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Legacy plugin migration skipped: ${message}`);
     }
   }
 
@@ -466,19 +513,25 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     }
   }
 
-  async findAll(): Promise<{ items: PluginConfig[]; total: number }> {
+  /** 目录全部插件，附当前用户装载状态（enabled/lifecycleStatus 取用户装载表） */
+  async findAll(userId?: string): Promise<{ items: PluginConfig[]; total: number }> {
     const rows = await this.db.select().from(lifePluginConfig);
-    const items: PluginConfig[] = rows.map((row) => this.mapRowToPlugin(row));
+    const items: PluginConfig[] = [];
+    for (const row of rows) {
+      items.push(await this.mapRowWithUserState(row, userId));
+    }
     return { items, total: items.length };
   }
 
-  async getAvailablePlugins(): Promise<{ items: AvailablePlugin[]; total: number }> {
+  async getAvailablePlugins(userId?: string): Promise<{ items: AvailablePlugin[]; total: number }> {
     const rows = await this.db.select().from(lifePluginConfig);
-    const items: AvailablePlugin[] = rows.map((row) => {
+    const items: AvailablePlugin[] = [];
+    for (const row of rows) {
       const cfg = (row.config ?? {}) as Record<string, unknown>;
       const category = typeof cfg.category === 'string' ? cfg.category : 'other';
       const seed = SEED_PLUGINS.find((s) => s.pluginKey === row.pluginKey);
-      return {
+      const userState = await this.getUserInstallation(userId, row.pluginKey);
+      items.push({
         pluginKey: row.pluginKey,
         name: row.name,
         description: row.description ?? '',
@@ -486,97 +539,118 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
         category,
         isCore: row.pluginKey === CORE_PLUGIN_KEY,
         config: this.stripCategoryFromConfig(cfg),
-        installed: row.enabled,
-        lifecycleStatus: row.lifecycleStatus as PluginLifecycleStatus,
+        installed: userState?.enabled ?? false,
+        lifecycleStatus: (userState?.lifecycleStatus ?? 'discovered') as PluginLifecycleStatus,
         riskLevel: row.riskLevel as 'low' | 'medium' | 'high',
         analyzable: seed?.analyzable ?? false,
         analysisLabel: seed?.analysisLabel,
-      };
-    });
+      });
+    }
     return { items, total: items.length };
   }
 
-  async getInstalledPlugins(): Promise<{ items: InstalledPlugin[]; total: number }> {
-    // 已安装插件 = 启用中（enabled=true）或已暂停（suspended）的插件；
-    // 暂停的插件保留在列表中以便一键恢复，从未启用的种子插件不列入（走市场「安装」）
-    const rows = await this.db
+  async getInstalledPlugins(userId?: string): Promise<{ items: InstalledPlugin[]; total: number }> {
+    if (!userId) return { items: [], total: 0 };
+    // 当前用户已装载 = 启用中（enabled=true）或已暂停（suspended）；
+    // 暂停的插件保留在列表中以便一键恢复，从未装载的插件不列入（走市场/插件中心「安装」）
+    const states = await this.db
       .select()
-      .from(lifePluginConfig)
+      .from(lifePluginInstallations)
       .where(
-        or(
-          eq(lifePluginConfig.enabled, true),
-          eq(lifePluginConfig.lifecycleStatus, 'suspended'),
+        and(
+          eq(lifePluginInstallations.userId, userId),
+          or(
+            eq(lifePluginInstallations.enabled, true),
+            eq(lifePluginInstallations.lifecycleStatus, 'suspended'),
+          ),
         ),
       );
-    const items: InstalledPlugin[] = rows.map((row) => ({
-      ...this.mapRowToPlugin(row),
-      installedAt: row.createdAt
-        ? row.createdAt.toISOString()
-        : (row.updatedAt ? row.updatedAt.toISOString() : ''),
-      isCore: row.pluginKey === CORE_PLUGIN_KEY,
-    }));
+    const items: InstalledPlugin[] = [];
+    for (const state of states) {
+      const dirRows = await this.db
+        .select()
+        .from(lifePluginConfig)
+        .where(eq(lifePluginConfig.pluginKey, state.pluginKey));
+      if (dirRows.length === 0) continue;
+      const row = dirRows[0];
+      items.push({
+        ...(await this.mapRowWithUserState(row, userId)),
+        installedAt: state.installedAt
+          ? state.installedAt.toISOString()
+          : (state.createdAt ? state.createdAt.toISOString() : ''),
+        isCore: row.pluginKey === CORE_PLUGIN_KEY,
+      });
+    }
     return { items, total: items.length };
   }
 
   async installPlugin(pluginKey: string, userId?: string): Promise<PluginConfig> {
     try {
-      const result = await this.db.transaction(async (tx) => {
-        const existing = await tx
-          .select()
-          .from(lifePluginConfig)
-          .where(eq(lifePluginConfig.pluginKey, pluginKey));
+      if (!userId) {
+        throw new BadRequestException('缺少用户上下文，无法装载插件');
+      }
+      const dirRows = await this.db
+        .select()
+        .from(lifePluginConfig)
+        .where(eq(lifePluginConfig.pluginKey, pluginKey));
+      if (dirRows.length === 0) {
+        throw new NotFoundException('插件不存在或不在可用列表中');
+      }
+      const row = dirRows[0];
 
-        if (existing.length === 0) {
-          throw new NotFoundException('插件不存在或不在可用列表中');
-        }
+      const existing = await this.getUserInstallation(userId, pluginKey);
+      if (existing?.enabled) {
+        throw new ConflictException('插件已安装且处于启用状态');
+      }
 
-        if (existing[0].enabled) {
-          throw new ConflictException('插件已安装且处于启用状态');
-        }
+      await this.db
+        .insert(lifePluginInstallations)
+        .values({
+          userId,
+          pluginKey,
+          enabled: true,
+          lifecycleStatus: 'loading',
+          installedAt: existing?.installedAt ?? new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [lifePluginInstallations.userId, lifePluginInstallations.pluginKey],
+          set: { enabled: true, lifecycleStatus: 'loading' },
+        });
 
-        const [row] = await tx
-          .update(lifePluginConfig)
-          .set({
-            enabled: true,
-            lifecycleStatus: 'loading',
-            // 安装时记录安装时间（旧数据 createdAt 可能缺失）
-            createdAt: existing[0].createdAt ?? new Date(),
-          })
-          .where(eq(lifePluginConfig.pluginKey, pluginKey))
-          .returning();
-
-        if (!row) {
-          throw new NotFoundException('插件不存在');
-        }
-
-        return row;
-      });
-
+      const wasGlobalActive = await this.countActiveUsers(pluginKey) > 1;
       setTimeout(() => {
         this.db
-          .update(lifePluginConfig)
+          .update(lifePluginInstallations)
           .set({ lifecycleStatus: 'active' })
-          .where(eq(lifePluginConfig.pluginKey, pluginKey))
+          .where(
+            and(
+              eq(lifePluginInstallations.userId, userId),
+              eq(lifePluginInstallations.pluginKey, pluginKey),
+            ),
+          )
           .then(() => {
-            // 激活后装载插件云函数（无 server.js 的插件自动跳过）
-            return this.pluginRuntime.load(pluginKey);
+            // 仅当该插件此前全局无任何用户装载时，才装载云函数（全局共享一份运行时）
+            if (!wasGlobalActive) {
+              return this.pluginRuntime.load(pluginKey);
+            }
+            return undefined;
           })
           .catch((err) => {
             this.logger.error(`Failed to activate plugin ${pluginKey}: ${String(err)}`);
           });
       }, 300);
 
-      this.logger.log(`Plugin installed: ${pluginKey}`);
+      this.logger.log(`Plugin installed for user ${userId}: ${pluginKey}`);
       void this.lifeLogService.append({
         eventType: 'plugin_installed',
         eventCategory: 'plugins',
-        contentSummary: `安装插件：${result.name}`,
+        contentSummary: `安装插件：${row.name}`,
         metadata: { pluginKey },
       }, userId ?? '');
 
-      return this.mapRowToPlugin(result);
+      return this.mapRowWithUserState(row, userId);
     } catch (error) {
-      if (error instanceof ConflictException || error instanceof NotFoundException) {
+      if (error instanceof ConflictException || error instanceof NotFoundException || error instanceof BadRequestException) {
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -591,37 +665,38 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
       if (pluginKey === CORE_PLUGIN_KEY) {
         throw new BadRequestException('核心插件不可卸载');
       }
+      if (!userId) {
+        throw new BadRequestException('缺少用户上下文，无法卸载插件');
+      }
 
-      let pluginName = '';
-      await this.db.transaction(async (tx) => {
-        const existing = await tx
-          .select()
-          .from(lifePluginConfig)
-          .where(eq(lifePluginConfig.pluginKey, pluginKey));
+      const dirRows = await this.db
+        .select()
+        .from(lifePluginConfig)
+        .where(eq(lifePluginConfig.pluginKey, pluginKey));
+      if (dirRows.length === 0) {
+        throw new NotFoundException('插件未安装');
+      }
+      const pluginName = dirRows[0].name;
 
-        if (existing.length === 0) {
-          throw new NotFoundException('插件未安装');
-        }
+      const existing = await this.getUserInstallation(userId, pluginKey);
+      if (!existing) {
+        throw new NotFoundException('该用户未装载此插件');
+      }
 
-        pluginName = existing[0].name;
+      await this.db
+        .delete(lifePluginInstallations)
+        .where(
+          and(
+            eq(lifePluginInstallations.userId, userId),
+            eq(lifePluginInstallations.pluginKey, pluginKey),
+          ),
+        );
 
-        const updated = await tx
-          .update(lifePluginConfig)
-          .set({
-            enabled: false,
-            lifecycleStatus: 'unloaded',
-          })
-          .where(eq(lifePluginConfig.pluginKey, pluginKey))
-          .returning({ id: lifePluginConfig.id });
-
-        if (updated.length === 0) {
-          throw new NotFoundException('插件不存在');
-        }
-      });
-
-      this.logger.log(`Plugin uninstalled: ${pluginKey}`);
-      // 卸载后注销云函数（保留数据目录）
-      await this.pluginRuntime.unload(pluginKey);
+      this.logger.log(`Plugin uninstalled for user ${userId}: ${pluginKey}`);
+      // 全局已无任何用户装载 → 注销云函数（保留数据目录）
+      if (await this.countActiveUsers(pluginKey) === 0) {
+        await this.pluginRuntime.unload(pluginKey);
+      }
       void this.lifeLogService.append({
         eventType: 'plugin_uninstalled',
         eventCategory: 'plugins',
@@ -645,74 +720,82 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
   }
 
   async suspendPlugin(pluginKey: string, userId?: string): Promise<PluginConfig> {
-    const existing = await this.db
+    const dirRows = await this.db
       .select()
       .from(lifePluginConfig)
       .where(eq(lifePluginConfig.pluginKey, pluginKey));
-
-    if (existing.length === 0) {
+    if (dirRows.length === 0) {
       throw new NotFoundException('插件不存在');
     }
-    if (existing[0].lifecycleStatus !== 'active') {
+    const existing = await this.getUserInstallation(userId, pluginKey);
+    if (!existing) {
+      throw new NotFoundException('该用户未装载此插件');
+    }
+    if (existing.lifecycleStatus !== 'active') {
       throw new BadRequestException('只有处于运行中的插件才能暂停');
     }
     if (pluginKey === CORE_PLUGIN_KEY) {
       throw new BadRequestException('核心插件不可暂停');
     }
 
-    const [row] = await this.db
-      .update(lifePluginConfig)
+    await this.db
+      .update(lifePluginInstallations)
       .set({ lifecycleStatus: 'suspended', enabled: false })
-      .where(eq(lifePluginConfig.pluginKey, pluginKey))
-      .returning();
+      .where(
+        and(
+          eq(lifePluginInstallations.userId, userId),
+          eq(lifePluginInstallations.pluginKey, pluginKey),
+        ),
+      );
 
-    if (!row) {
-      throw new NotFoundException('插件不存在');
-    }
-
-    this.logger.log(`Plugin suspended: ${pluginKey}`);
-    // 暂停：注销云函数（恢复时重新装载）；内置模块如有暂停钩子一并停止（如 child-tv 定时调度）
-    await this.pluginRuntime.unload(pluginKey);
-    try {
-      await this.childTvService?.onPluginSuspended?.();
-    } catch (err) {
-      this.logger.warn(`Failed to notify builtin module on suspend ${pluginKey}: ${String(err)}`);
+    this.logger.log(`Plugin suspended for user ${userId}: ${pluginKey}`);
+    // 全局已无任何用户启用 → 注销云函数 + 通知内置模块停止（如 child-tv 定时调度）
+    if (await this.countActiveUsers(pluginKey) === 0) {
+      await this.pluginRuntime.unload(pluginKey);
+      try {
+        await this.childTvService?.onPluginSuspended?.();
+      } catch (err) {
+        this.logger.warn(`Failed to notify builtin module on suspend ${pluginKey}: ${String(err)}`);
+      }
     }
     void this.lifeLogService.append({
       eventType: 'plugin_suspended',
       eventCategory: 'plugins',
-      contentSummary: `暂停插件：${row.name}`,
+      contentSummary: `暂停插件：${dirRows[0].name}`,
       metadata: { pluginKey },
     }, userId ?? '');
 
-    return this.mapRowToPlugin(row);
+    return this.mapRowWithUserState(dirRows[0], userId);
   }
 
   async resumePlugin(pluginKey: string, userId?: string): Promise<PluginConfig> {
-    const existing = await this.db
+    const dirRows = await this.db
       .select()
       .from(lifePluginConfig)
       .where(eq(lifePluginConfig.pluginKey, pluginKey));
-
-    if (existing.length === 0) {
+    if (dirRows.length === 0) {
       throw new NotFoundException('插件不存在');
     }
-    if (existing[0].lifecycleStatus !== 'suspended') {
+    const existing = await this.getUserInstallation(userId, pluginKey);
+    if (!existing) {
+      throw new NotFoundException('该用户未装载此插件');
+    }
+    if (existing.lifecycleStatus !== 'suspended') {
       throw new BadRequestException('只有处于暂停状态的插件才能恢复');
     }
 
-    const [row] = await this.db
-      .update(lifePluginConfig)
+    await this.db
+      .update(lifePluginInstallations)
       .set({ lifecycleStatus: 'active', enabled: true })
-      .where(eq(lifePluginConfig.pluginKey, pluginKey))
-      .returning();
+      .where(
+        and(
+          eq(lifePluginInstallations.userId, userId),
+          eq(lifePluginInstallations.pluginKey, pluginKey),
+        ),
+      );
 
-    if (!row) {
-      throw new NotFoundException('插件不存在');
-    }
-
-    this.logger.log(`Plugin resumed: ${pluginKey}`);
-    // 恢复：重新装载云函数；内置模块如有恢复钩子一并重启
+    this.logger.log(`Plugin resumed for user ${userId}: ${pluginKey}`);
+    // 恢复：装载云函数 + 通知内置模块重启（幂等：已加载则跳过）
     await this.pluginRuntime.load(pluginKey);
     try {
       await this.childTvService?.onPluginResumed?.();
@@ -722,11 +805,11 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     void this.lifeLogService.append({
       eventType: 'plugin_resumed',
       eventCategory: 'plugins',
-      contentSummary: `恢复插件：${row.name}`,
+      contentSummary: `恢复插件：${dirRows[0].name}`,
       metadata: { pluginKey },
     }, userId ?? '');
 
-    return this.mapRowToPlugin(row);
+    return this.mapRowWithUserState(dirRows[0], userId);
   }
 
   async update(id: string, dto: UpdatePluginDto): Promise<PluginConfig> {
@@ -768,18 +851,77 @@ ${seed.pluginKey === 'dsh-plugin-child-tv'
     return this.mapRowToPlugin(row);
   }
 
-  async getDshProfile(): Promise<{
+  async getDshProfile(userId?: string): Promise<{
     platformName: string;
     version: string;
     theme: string;
     plugins: PluginConfig[];
   }> {
-    const { items } = await this.findAll();
+    const { items } = await this.findAll(userId);
     return {
       platformName: 'Life-OS',
       version: '1.0.0',
       theme: 'dark-minimal',
       plugins: items,
+    };
+  }
+
+  // ===== 用户装载状态 helpers =====
+
+  /** 取某用户对某插件的装载记录（无记录返回 null） */
+  private async getUserInstallation(
+    userId: string | undefined,
+    pluginKey: string,
+  ): Promise<(typeof lifePluginInstallations.$inferSelect) | null> {
+    if (!userId) return null;
+    const rows = await this.db
+      .select()
+      .from(lifePluginInstallations)
+      .where(
+        and(
+          eq(lifePluginInstallations.userId, userId),
+          eq(lifePluginInstallations.pluginKey, pluginKey),
+        ),
+      );
+    return rows[0] ?? null;
+  }
+
+  /** 全局还有多少用户启用该插件（enabled=true 的装载记录数） */
+  private async countActiveUsers(pluginKey: string): Promise<number> {
+    const rows = await this.db
+      .select()
+      .from(lifePluginInstallations)
+      .where(
+        and(
+          eq(lifePluginInstallations.pluginKey, pluginKey),
+          eq(lifePluginInstallations.enabled, true),
+        ),
+      );
+    return rows.length;
+  }
+
+  /** 目录行 + 当前用户装载状态合成 PluginConfig（enabled/lifecycleStatus 取用户视角） */
+  private async mapRowWithUserState(
+    row: typeof lifePluginConfig.$inferSelect,
+    userId?: string,
+  ): Promise<PluginConfig> {
+    const userState = await this.getUserInstallation(userId, row.pluginKey);
+    const cfg = (row.config ?? {}) as Record<string, unknown>;
+    const caps = Array.isArray(row.capabilities) ? (row.capabilities as string[]) : [];
+    const seed = SEED_PLUGINS.find((s) => s.pluginKey === row.pluginKey);
+    return {
+      id: row.id,
+      pluginKey: row.pluginKey,
+      name: row.name,
+      description: row.description,
+      enabled: userState?.enabled ?? false,
+      version: row.version,
+      config: this.stripCategoryFromConfig(cfg),
+      lifecycleStatus: (userState?.lifecycleStatus ?? 'discovered') as PluginLifecycleStatus,
+      riskLevel: (row.riskLevel ?? 'low') as 'low' | 'medium' | 'high',
+      capabilities: caps,
+      analyzable: seed?.analyzable ?? false,
+      analysisLabel: seed?.analysisLabel,
     };
   }
 

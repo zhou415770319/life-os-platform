@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { LOCAL_DATABASE } from '@server/storage/local-database.module';
 import type { LocalDatabase } from '@server/storage/local-database';
-import { lifePluginConfig } from '@server/database/schema';
+import { lifePluginInstallations } from '@server/database/schema';
 import { eq } from '@server/storage/drizzle-compat';
 import type { PluginMethodParam } from '@shared/api.interface';
 import { LocalCapabilityService } from '../../platform-local/local-capability.service';
@@ -118,17 +118,20 @@ export class PluginRuntimeService implements OnApplicationBootstrap {
     }
   }
 
-  /** 应用启动后：扫描已启用插件，补齐云函数注册 */
+  /** 应用启动后：扫描已装载插件（任意用户启用），补齐云函数注册 */
   async onApplicationBootstrap(): Promise<void> {
     try {
+      // 装载表（按用户隔离）中有任一用户 enabled=true 即恢复该插件云函数；
+      // 目录表 enabled 已不再承载运行状态
       const rows = await this.db
-        .select({ pluginKey: lifePluginConfig.pluginKey })
-        .from(lifePluginConfig)
-        .where(eq(lifePluginConfig.enabled, true));
-      for (const row of rows) {
-        await this.load(row.pluginKey);
+        .select({ pluginKey: lifePluginInstallations.pluginKey })
+        .from(lifePluginInstallations)
+        .where(eq(lifePluginInstallations.enabled, true));
+      const keys = Array.from(new Set(rows.map((r) => r.pluginKey)));
+      for (const pluginKey of keys) {
+        await this.load(pluginKey);
       }
-      this.logger.log(`PluginRuntime ready, cloud functions restored for ${rows.length} enabled plugins`);
+      this.logger.log(`PluginRuntime ready, cloud functions restored for ${keys.length} enabled plugins`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`PluginRuntime bootstrap failed: ${message}`);

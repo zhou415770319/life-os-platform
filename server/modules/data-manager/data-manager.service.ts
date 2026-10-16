@@ -13,6 +13,7 @@ import {
   lifeQuickLinks,
   lifeLifeLogs,
   lifePluginConfig,
+  lifePluginInstallations,
   lifeTasks,
   lifeFinanceAccounts,
   lifeFinanceTransactions,
@@ -66,7 +67,7 @@ export class DataManagerService {
 
   // ===== 导出选项 =====
 
-  async getExportOptions(): Promise<ExportOptionsResult> {
+  async getExportOptions(userId?: string): Promise<ExportOptionsResult> {
     const modules: ExportOptionItem[] = [];
     for (const m of CORE_MODULES) {
       modules.push({
@@ -78,14 +79,23 @@ export class DataManagerService {
       });
     }
 
-    // 只展示已装载（enabled=true）且非核心看板的插件
-    const pluginRows = await this.db
-      .select()
-      .from(lifePluginConfig)
-      .where(eq(lifePluginConfig.enabled, true));
+    // 只展示当前用户已装载（enabled=true）且非核心看板的插件
+    const stateRows = userId
+      ? await this.db
+          .select()
+          .from(lifePluginInstallations)
+          .where(eq(lifePluginInstallations.userId, userId))
+      : [];
     const plugins: ExportOptionItem[] = [];
-    for (const row of pluginRows) {
-      if (row.pluginKey === 'dsh-plugin-life-dashboard') continue;
+    for (const state of stateRows) {
+      if (!state.enabled) continue;
+      if (state.pluginKey === 'dsh-plugin-life-dashboard') continue;
+      const dirRows = await this.db
+        .select()
+        .from(lifePluginConfig)
+        .where(eq(lifePluginConfig.pluginKey, state.pluginKey));
+      if (dirRows.length === 0) continue;
+      const row = dirRows[0];
       const cfg = (row.config ?? {}) as Record<string, unknown>;
       plugins.push({
         key: row.pluginKey,

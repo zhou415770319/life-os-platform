@@ -21,28 +21,30 @@ export class PluginsController {
   ) {}
 
   @Get('profile')
-  async getProfile(): Promise<{
+  async getProfile(
+    @Req() req: any,
+  ): Promise<{
     platformName: string;
     version: string;
     theme: string;
     plugins: PluginConfig[];
   }> {
-    return this.pluginsService.getDshProfile();
+    return this.pluginsService.getDshProfile(req.userContext?.userId);
   }
 
   @Get()
-  async findAll(): Promise<ListResponse<PluginConfig>> {
-    return this.pluginsService.findAll();
+  async findAll(@Req() req: any): Promise<ListResponse<PluginConfig>> {
+    return this.pluginsService.findAll(req.userContext?.userId);
   }
 
   @Get('available')
-  async getAvailable(): Promise<ListResponse<AvailablePlugin>> {
-    return this.pluginsService.getAvailablePlugins();
+  async getAvailable(@Req() req: any): Promise<ListResponse<AvailablePlugin>> {
+    return this.pluginsService.getAvailablePlugins(req.userContext?.userId);
   }
 
   @Get('installed')
-  async getInstalled(): Promise<ListResponse<InstalledPlugin>> {
-    return this.pluginsService.getInstalledPlugins();
+  async getInstalled(@Req() req: any): Promise<ListResponse<InstalledPlugin>> {
+    return this.pluginsService.getInstalledPlugins(req.userContext?.userId);
   }
 
   @Get('methods')
@@ -66,7 +68,7 @@ export class PluginsController {
     );
   }
 
-  @Roles('admin')
+  // 装载/暂停/恢复/卸载均按「当前登录用户」隔离，普通用户可管理自己的装载（无需 admin）
   @Post('install/:pluginKey')
   async install(
     @Param('pluginKey') pluginKey: string,
@@ -75,7 +77,6 @@ export class PluginsController {
     return this.pluginsService.installPlugin(pluginKey, req.userContext?.userId || '');
   }
 
-  @Roles('admin')
   @Post('uninstall/:pluginKey')
   async uninstall(
     @Param('pluginKey') pluginKey: string,
@@ -84,7 +85,6 @@ export class PluginsController {
     return this.pluginsService.uninstallPlugin(pluginKey, req.userContext?.userId || '');
   }
 
-  @Roles('admin')
   @Post('suspend/:pluginKey')
   async suspend(
     @Param('pluginKey') pluginKey: string,
@@ -93,7 +93,6 @@ export class PluginsController {
     return this.pluginsService.suspendPlugin(pluginKey, req.userContext?.userId || '');
   }
 
-  @Roles('admin')
   @Post('resume/:pluginKey')
   async resume(
     @Param('pluginKey') pluginKey: string,
