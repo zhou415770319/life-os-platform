@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { exec, spawn, ChildProcess } from 'child_process';
+import * as net from 'net';
 import { JsonStore } from '@server/storage/json-store';
 import { defaultUrlResolver } from '@server/common/url-resolver';
 import type {
@@ -64,6 +65,18 @@ interface PlayerSession {
   manual: boolean;
   /** 停止原因 */
   stopReason: string | null;
+  /** 当前播放的合集 id（用于记录/恢复播放进度） */
+  collectionId: string | null;
+  /** mpv IPC 通道（Windows 命名管道 / unix socket） */
+  ipcPath: string | null;
+}
+
+/** 合集播放进度：记录上次播放到的条目索引（0-based），下次播放该合集时从进度处继续 */
+interface ChildTvCollectionProgress {
+  id: string;
+  collectionId: string;
+  entryIndex: number;
+  updatedAt: string;
 }
 
 const M3U_FILE = 'child-tv-playlist.m3u';
@@ -82,6 +95,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   private readonly collectionsStore = new JsonStore<ChildTvCollection>('child-tv-collections.json', this.dataDir);
   private readonly logsStore = new JsonStore<ChildTvLogEntry>('child-tv-log.json', this.dataDir);
   private readonly statsStore = new JsonStore<ChildTvStatsEntry>('child-tv-stats.json', this.dataDir);
+  /** 合集播放进度（entryIndex：上次播放到的条目索引，0-based） */
+  private readonly progressStore = new JsonStore<ChildTvCollectionProgress>('child-tv-progress.json', this.dataDir);
 
   private authFile = path.join(this.dataDir, 'child-tv-auth.json');
   private settingsFile = path.join(this.dataDir, 'child-tv-settings.json');
@@ -1062,6 +1077,12 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     if (entries.some((e) => /bilivideo\.com|bilibili\.com/i.test(e.target))) {
       args.push('--http-header-fields=Referer:https://www.bilibili.com');
     }
+    // 合集播放进度续播：上次播放到的条目索引（0-based），用 --playlist-start 从该条目继续
+    const progress = this.progressStore.findAll().find((p) => p.collectionId === collection.id);
+    if (progress && progress.entryIndex > 0 && progress.entryIndex < entries.length) {
+      args.push(`--playlist-start=${progress.entryIndex}`);
+      this.log('info', `合集「${collection.name}」从第 ${progress.entryIndex + 1} 项续播（共 ${entries.length} 项）`);
+    }
     return {
       title: `${collection.name}（${entries.length} 项）`,
       args,
@@ -1078,9 +1099,22 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       '--quiet',
       '--keep-open=no',
       '--force-window=yes',
+      // 抖音/B站等 CDN 对默认 UA 返回 403，必须使用浏览器 UA
+      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      // mpv 运行日志（诊断播放异常退出）
+      `--log-file=${path.join(this.dataDir, 'childtv-mpv.log')}`,
+      // 开启 mpv IPC，用于周期性读取播放位置（记录合集播放进度）
+      `--input-ipc-server=${this.mpvIpcPath()}`,
     ];
     if (s.mediaType === 'audio') common.push('--no-video');
     return [...common, ...args];
+  }
+
+  /** mpv IPC 通道：Windows 命名管道 / 其他平台 unix socket */
+  private mpvIpcPath(): string {
+    return process.platform === 'win32'
+      ? '\\\\.\\pipe\\lifeos_childtv'
+      : '/tmp/lifeos-childtv.sock';
   }
 
   async startPlayback(scheduleId: string, manual: boolean): Promise<ChildTvRuntimeStatus> {
@@ -1138,7 +1172,11 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       endsAt: endsAt.toISOString(),
       manual,
       stopReason: null,
+      collectionId: schedule.collectionId ?? null,
+      ipcPath: this.mpvIpcPath(),
     };
+    // 播放中周期性记录进度（下一次 tick 起持续刷新，任何方式停止/崩溃都留有最近进度）
+    void this.recordPlaybackProgress();
     this.log('info', `${manual ? '家长手动' : '定时'}播放开始「${resolved.title}」${schedule.mediaType === 'audio' ? '(音频)' : '(视频)'}`);
     return this.getRuntimeStatus();
   }
@@ -1146,6 +1184,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   stopPlayback(reason: string): { success: boolean } {
     if (this.player) {
       this.player.stopReason = reason;
+      // 停止前尽力记录一次播放进度（tick 已周期性记录，此处兜底最后一次）
+      if (this.player.collectionId) void this.recordPlaybackProgress();
       const pid = this.player.proc.pid;
       try {
         // taskkill /T 连子进程一起结束（Windows 更可靠）
@@ -1159,6 +1199,72 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       this.player = null;
     }
     return { success: true };
+  }
+
+  // ==================== 播放进度记录/恢复 ====================
+
+  /** 通过 mpv IPC 查询属性（Windows 命名管道 / unix socket），失败返回 null */
+  private queryMpvProperty(ipcPath: string | null, property: string): Promise<unknown> {
+    return new Promise((resolve) => {
+      if (!ipcPath) {
+        resolve(null);
+        return;
+      }
+      let socket: net.Socket;
+      try {
+        socket = net.connect(ipcPath);
+      } catch {
+        resolve(null);
+        return;
+      }
+      let settled = false;
+      const done = (v: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { socket.destroy(); } catch { /* ignore */ }
+        resolve(v);
+      };
+      const timer = setTimeout(() => done(null), 1500);
+      socket.on('error', () => done(null));
+      socket.on('connect', () => {
+        socket.write(`${JSON.stringify({ command: ['get_property', property], request_id: 1 })}\n`);
+      });
+      let buf = '';
+      socket.on('data', (chunk) => {
+        buf += chunk.toString('utf8');
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          let msg: { request_id?: number; error?: string; data?: unknown };
+          try {
+            msg = JSON.parse(line.trim());
+          } catch {
+            continue; // 忽略非 JSON 行
+          }
+          if (!msg || typeof msg !== 'object') continue;
+          if (msg.request_id === 1) {
+            if (msg.error === 'success' || msg.error === undefined) done(msg.data ?? null);
+            else done(null);
+          }
+        }
+      });
+    });
+  }
+
+  /** 记录当前播放位置：条目索引（0-based）写入合集进度 */
+  private async recordPlaybackProgress(): Promise<void> {
+    const p = this.player;
+    if (!p || !p.collectionId || !p.ipcPath) return;
+    const pos = await this.queryMpvProperty(p.ipcPath, 'playlist-pos');
+    if (typeof pos !== 'number' || pos < 0) return;
+    const now = new Date().toISOString();
+    const existing = this.progressStore.findAll().find((x) => x.collectionId === p.collectionId);
+    if (existing) {
+      this.progressStore.update(existing.id, { entryIndex: pos, updatedAt: now });
+    } else {
+      this.progressStore.create({ id: crypto.randomUUID(), collectionId: p.collectionId, entryIndex: pos, updatedAt: now });
+    }
   }
 
   /** 手动立即播放指定时段（本机 mpv 播放） */
@@ -1248,6 +1354,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       if (this.player && this.player.proc.exitCode !== null) {
         this.player = null;
       }
+      // 播放中周期性记录合集播放进度（15s 一次，不阻塞调度）
+      if (this.player) void this.recordPlaybackProgress();
     } catch (e) {
       this.log('error', `调度异常：${e instanceof Error ? e.message : String(e)}`);
     }
