@@ -1,4 +1,5 @@
-import type { ResolvedItem, UrlPlatform, UrlProvider, UrlResolveResult } from './types';
+import type { ResolvedItem, UrlPlatform, UrlProvider, UrlResolveOptions, UrlResolveResult } from './types';
+import { RequireBrowserError, RequireCookieError } from './types';
 
 /**
  * 公共链接解析器（注册表 + 分发）
@@ -45,9 +46,10 @@ export class UrlResolverService {
    * 解析入口：
    * 1. 直链 → 直接返回
    * 2. 逐个 provider detect → resolve（收集条目，成功即返回）
-   * 3. 全部失败 → generic 兜底（页面内媒体正则，见 generic provider），仍无 → 返回原地址 + error
+   * 3. provider 明确需要 Cookie → 返回 requires 提示（由调用方收集后带 cookie 重试）
+   * 4. 全部失败 → generic 兜底（页面内媒体正则，见 generic provider），仍无 → 返回原地址 + error
    */
-  async resolve(url: string): Promise<UrlResolveResult> {
+  async resolve(url: string, options?: UrlResolveOptions): Promise<UrlResolveResult> {
     const trimmed = url.trim();
     if (this.isDirectUrl(trimmed)) {
       return { platform: 'direct', isDirect: true, items: [{ url: trimmed }] };
@@ -55,11 +57,35 @@ export class UrlResolverService {
     for (const p of this.providers) {
       if (!p.detect(trimmed)) continue;
       try {
-        const items = await p.resolve(trimmed);
+        const items = await p.resolve(trimmed, options);
         if (items.length > 0) {
           return { platform: p.name, isDirect: items.length === 1, items };
         }
-      } catch {
+      } catch (e) {
+        if (e instanceof RequireCookieError) {
+          // 平台明确需要 Cookie：不再降级，提示调用方收集 Cookie 后重试
+          return {
+            platform: p.name,
+            isDirect: false,
+            items: [],
+            requires: { platform: e.platform, kind: 'cookie', hint: e.hint },
+          };
+        }
+        if (e instanceof RequireBrowserError) {
+          // 平台需要浏览器辅助（防盗链直链无法后端直连）：返回待解析条目与提示，
+          // 由调用方生成浏览器脚本并引导用户运行后回传直链
+          return {
+            platform: p.name,
+            isDirect: false,
+            items: [],
+            requires: {
+              platform: e.platform,
+              kind: 'browser',
+              hint: e.hint,
+              payload: { trackIds: e.trackIds, token: '' },
+            },
+          };
+        }
         /* 该平台解析失败，继续尝试下一个 */
       }
     }
@@ -77,4 +103,4 @@ export function createUrlResolver(extra?: UrlProvider[]): UrlResolverService {
   return new UrlResolverService(extra);
 }
 
-export type { ResolvedItem, UrlPlatform, UrlProvider, UrlResolveResult };
+export type { ResolvedItem, UrlPlatform, UrlProvider, UrlResolveOptions, UrlResolveResult };

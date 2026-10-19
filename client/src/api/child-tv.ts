@@ -7,6 +7,7 @@ import type {
   ChildTvLogEntry,
   ChildTvResolveUrlResult,
   ChildTvRuntimeStatus,
+  ChildTvScanResult,
   ChildTvSchedule,
   ChildTvScheduleInput,
   ChildTvSettings,
@@ -126,13 +127,43 @@ export async function childTvDeleteCollection(
   });
 }
 
-/** 解析 URL：直链 or 合集页提取视频地址 */
-export async function childTvResolveUrl(url: string): Promise<ChildTvResolveUrlResult> {
+/** 解析 URL：直链 or 合集页提取视频地址；cookie 为平台解析所需登录态（可选） */
+export async function childTvResolveUrl(url: string, cookie?: string): Promise<ChildTvResolveUrlResult> {
   return request<ChildTvResolveUrlResult>({
     url: '/api/child-tv/resolve-url',
     method: 'POST',
-    data: { url },
+    data: cookie ? { url, cookie } : { url },
   });
+}
+
+/** 扫描文件夹：递归返回全部音视频文件（含 .xm），按文件名排序，供合集导入预览 */
+export async function childTvScanFolder(path: string): Promise<ChildTvScanResult> {
+  return request<ChildTvScanResult>({
+    url: '/api/child-tv/scan-folder',
+    method: 'POST',
+    data: { path },
+  });
+}
+
+// ===== 喜马拉雅 · 浏览器辅助解析 =====
+
+/** 生成浏览器辅助解析脚本（用户在已登录的喜马拉雅页面 Console 运行） */
+export async function childTvXimalayaScript(
+  token: string,
+  baseUrl: string,
+): Promise<{ script: string }> {
+  return request<{ script: string }>({
+    url: '/api/child-tv/ximalaya/script',
+    method: 'GET',
+    params: { token, baseUrl },
+  });
+}
+
+/** 查询浏览器辅助解析结果（脚本回传后拉取，按原顺序返回） */
+export async function childTvXimalayaPending(
+  token: string,
+): Promise<{ items: { title?: string; url: string }[]; failed: { id: string; title: string; err?: string }[] }> {
+  return request({ url: '/api/child-tv/ximalaya/pending', method: 'GET', params: { token } });
 }
 
 // ===== 时段 =====
@@ -169,11 +200,16 @@ export async function childTvDeleteSchedule(id: string): Promise<{ success: bool
 
 // ===== 控制与状态 =====
 
-export async function childTvPlay(scheduleId: string): Promise<ChildTvRuntimeStatus> {
+/** 立即播放：传 scheduleId 按时段播放，或传 collectionId 直接按合集播放（二选一）；entryIndex 指定从第几项开始（0-based，用于上一集/下一集/按集续播） */
+export async function childTvPlay(dto: {
+  scheduleId?: string;
+  collectionId?: string;
+  entryIndex?: number;
+}): Promise<ChildTvRuntimeStatus> {
   return request<ChildTvRuntimeStatus>({
     url: '/api/child-tv/play',
     method: 'POST',
-    data: { scheduleId },
+    data: dto,
   });
 }
 

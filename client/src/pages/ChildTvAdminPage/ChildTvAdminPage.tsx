@@ -23,11 +23,14 @@ import {
   BookOpen,
   Clock,
   FileSearch,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { childTvApi } from '@client/src/api';
 import type {
   ChildTvBrowseResult,
   ChildTvCollection,
+  ChildTvScanFile,
   ChildTvSchedule,
   ChildTvScheduleInput,
 } from '@shared/api.interface';
@@ -48,6 +51,26 @@ import {
 } from '@/components/ui/dialog';
 
 const WEEK_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 解析平台中文名（用于解析结果类型标签） */
+function platformName(p?: string): string {
+  switch (p) {
+    case 'douyin':
+      return '（抖音）';
+    case 'douyin-selected':
+      return '（抖音精选）';
+    case 'bilibili':
+      return '（B 站）';
+    case 'ximalaya':
+      return '（喜马拉雅）';
+    case 'direct':
+      return '';
+    case 'generic':
+      return '';
+    default:
+      return p ? `（${p}）` : '';
+  }
+}
 
 function weekdayLabel(weekdays: number[]): string {
   if (!weekdays || weekdays.length === 0) return '每天';
@@ -95,11 +118,28 @@ function CollectionDialog({
   open: boolean;
   editing: ChildTvCollection | null;
   onClose: () => void;
-  onSave: (dto: { id?: string; name: string; items: ChildTvCollection['items'] }) => void;
+  onSave: (dto: {
+    id?: string;
+    name: string;
+    platform?: ChildTvCollection['platform'];
+    items: ChildTvCollection['items'];
+  }) => void;
 }) {
   const [name, setName] = useState('');
   const [items, setItems] = useState<ChildTvCollection['items']>([]);
+  const [platform, setPlatform] = useState<NonNullable<ChildTvCollection['platform']>>('local');
   const [picker, setPicker] = useState<{ mode: 'folder' | 'file' } | null>(null);
+  const [scanningFolder, setScanningFolder] = useState(false);
+  /** 文件夹导入预览：选中文件夹后先扫描出音视频文件列表，用户可勾选/取消后导入为文件条目 */
+  const [folderScan, setFolderScan] = useState<{
+    path: string;
+    files: ChildTvScanFile[];
+    checked: Record<string, boolean>;
+  } | null>(null);
+  /** 文件夹条目文件列表预览（展开查看播放列表，key = 文件夹路径） */
+  const [expandedFolder, setExpandedFolder] = useState<string | null>(null);
+  const [folderListLoading, setFolderListLoading] = useState<string | null>(null);
+  const [folderLists, setFolderLists] = useState<Record<string, ChildTvScanFile[]>>({});
   const [urlInput, setUrlInput] = useState('');
   const [resolving, setResolving] = useState(false);
   const [resolveResult, setResolveResult] = useState<{
@@ -108,22 +148,154 @@ function CollectionDialog({
     items?: { title?: string; url: string }[];
     platform?: string;
     error?: string;
+    requires?: {
+      platform: string;
+      kind: 'cookie' | 'browser';
+      hint: string;
+      payload?: {
+        token: string;
+        trackIds: { id: string; title: string }[];
+        baseUrl?: string;
+      };
+    };
+  } | null>(null);
+  // 解析需要补充条件（如喜马拉雅 Cookie）时弹出的收集弹框
+  const [cookieDialog, setCookieDialog] = useState<{
+    open: boolean;
+    url: string;
+    platform: string;
+    hint: string;
+  } | null>(null);
+  // 喜马拉雅等平台需要「浏览器辅助」时弹出的脚本运行弹框
+  const [browserDialog, setBrowserDialog] = useState<{
+    open: boolean;
+    url: string;
+    platform: string;
+    hint: string;
+    payload: { token: string; trackIds: { id: string; title: string }[] };
   } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setName(editing?.name ?? '');
     setItems(editing ? [...(editing.items ?? [])] : []);
+    setPlatform(editing?.platform ?? 'local');
     setUrlInput('');
     setResolveResult(null);
+    setCookieDialog(null);
+    setFolderScan(null);
+    setScanningFolder(false);
+    setExpandedFolder(null);
+    setFolderListLoading(null);
+    setFolderLists({});
   }, [open, editing]);
 
   if (!open) return null;
 
-  const addFolder = (path: string) => {
-    setItems((prev) => [...prev, { id: crypto.randomUUID(), type: 'folder', value: path }]);
-    toast.success(`已添加文件夹：${path}（播放时自动扫描音视频并按文件名排序）`);
+  /** 切换平台类型：清空已添加内容（播放方式不同，内容类型不同） */
+  const changePlatform = (p: NonNullable<ChildTvCollection['platform']>) => {
+    setPlatform(p);
+    setItems([]);
+    setUrlInput('');
+    setResolveResult(null);
+    setCookieDialog(null);
+    setBrowserDialog(null);
+  };
+
+  /** web/ximalaya 平台：直接添加网页链接（每行一个，不解析直链——播放时用浏览器/客户端打开页面） */
+  const addPageUrls = () => {
+    const lines = urlInput
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /^https?:\/\//i.test(l));
+    if (lines.length === 0) return toast.error('请输入有效的网页链接（http/https）');
+    const adds = lines.map((u) => ({
+      id: crypto.randomUUID(),
+      type: 'url' as const,
+      value: u,
+      title: u.split('/').pop()?.split('?')[0] || undefined,
+    }));
+    setItems((prev) => [...prev, ...adds]);
+    toast.success(`已添加 ${adds.length} 个${platform === 'ximalaya' ? '喜马拉雅' : '网页'}链接`);
+    setUrlInput('');
+    setResolveResult(null);
+  };
+
+  const addFolder = async (path: string) => {
     setPicker(null);
+    setScanningFolder(true);
+    try {
+      const r = await childTvApi.childTvScanFolder(path);
+      if (r.files.length === 0) {
+        toast.error(`文件夹中没有可导入的音视频文件：${path}`);
+        return;
+      }
+      const checked: Record<string, boolean> = {};
+      r.files.forEach((f) => {
+        checked[f.path] = true;
+      });
+      setFolderScan({ path: r.path, files: r.files, checked });
+    } catch (e) {
+      toast.error(extractApiError(e, '扫描文件夹失败'));
+    } finally {
+      setScanningFolder(false);
+    }
+  };
+
+  const toggleFolderFile = (p: string) => {
+    setFolderScan((prev) => {
+      if (!prev) return prev;
+      return { ...prev, checked: { ...prev.checked, [p]: !prev.checked[p] } };
+    });
+  };
+
+  const toggleAllFolderFiles = (on: boolean) => {
+    setFolderScan((prev) => {
+      if (!prev) return prev;
+      const checked: Record<string, boolean> = {};
+      prev.files.forEach((f) => {
+        checked[f.path] = on;
+      });
+      return { ...prev, checked };
+    });
+  };
+
+  const confirmFolderScan = () => {
+    if (!folderScan) return;
+    const selected = folderScan.files.filter((f) => folderScan.checked[f.path]);
+    if (selected.length === 0) return toast.error('请至少勾选一个文件');
+    const adds = selected.map((f) => ({
+      id: crypto.randomUUID(),
+      type: 'file' as const,
+      value: f.path,
+      title: f.name,
+    }));
+    setItems((prev) => [...prev, ...adds]);
+    const skipped = folderScan.files.length - selected.length;
+    toast.success(
+      `已导入 ${adds.length} 个文件${skipped > 0 ? `（跳过 ${skipped} 个未勾选）` : ''}，可继续删除或调整顺序`,
+    );
+    setFolderScan(null);
+  };
+
+  /** 展开/收起文件夹条目的文件列表（播放列表预览，只读） */
+  const toggleFolderList = async (value: string) => {
+    if (expandedFolder === value) {
+      setExpandedFolder(null);
+      return;
+    }
+    setExpandedFolder(value);
+    if (folderLists[value]) return;
+    setFolderListLoading(value);
+    try {
+      const r = await childTvApi.childTvScanFolder(value);
+      setFolderLists((prev) => ({ ...prev, [value]: r.files }));
+    } catch (e) {
+      toast.error(extractApiError(e, '读取文件列表失败'));
+      setExpandedFolder(null);
+    } finally {
+      setFolderListLoading(null);
+    }
   };
 
   const addFile = (path: string) => {
@@ -139,6 +311,49 @@ function CollectionDialog({
     setResolveResult(null);
     try {
       const r = await childTvApi.childTvResolveUrl(u);
+      // 平台需要浏览器辅助（防盗链直链需在已登录页面运行脚本）→ 弹脚本运行弹框
+      if (r.requires?.kind === 'browser' && r.requires.payload?.token) {
+        setBrowserDialog({
+          open: true,
+          url: u,
+          platform: r.requires.platform,
+          hint: r.requires.hint,
+          payload: { token: r.requires.payload.token, trackIds: r.requires.payload.trackIds },
+        });
+        return;
+      }
+      // 平台需要补充条件（如喜马拉雅 Cookie）→ 弹出收集弹框，填写后带条件重试
+      if (r.requires?.kind === 'cookie') {
+        setCookieDialog({
+          open: true,
+          url: u,
+          platform: r.requires.platform,
+          hint: r.requires.hint,
+        });
+        return;
+      }
+      setResolveResult(r);
+    } catch (e) {
+      toast.error(extractApiError(e, '解析失败'));
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  /** 带 Cookie 重新解析（弹框确认后调用） */
+  const handleResolveWithCookie = async (cookie: string) => {
+    if (!cookieDialog) return;
+    const u = cookieDialog.url;
+    setResolving(true);
+    setResolveResult(null);
+    setCookieDialog(null);
+    try {
+      const r = await childTvApi.childTvResolveUrl(u, cookie);
+      if (r.requires?.kind === 'cookie') {
+        toast.error('解析仍需要 Cookie，请确认 Cookie 已是最新（浏览器重新复制）');
+        setCookieDialog({ open: true, url: u, platform: r.requires.platform, hint: r.requires.hint });
+        return;
+      }
       setResolveResult(r);
     } catch (e) {
       toast.error(extractApiError(e, '解析失败'));
@@ -206,7 +421,44 @@ function CollectionDialog({
           />
         </div>
 
-        {/* 添加方式 */}
+        {/* 平台类型：决定播放方式 */}
+        <div className="mb-4">
+          <label className="mb-1 block text-xs text-zinc-400">播放方式</label>
+          <div className="grid grid-cols-3 gap-2">
+            {(
+              [
+                { key: 'local', icon: '📁', label: '本地文件', desc: 'mpv 全屏播放（定时/进度）' },
+                { key: 'web', icon: '🌐', label: '网页链接', desc: '浏览器打开页面播放' },
+                { key: 'ximalaya', icon: '🎧', label: '喜马拉雅', desc: '打开喜马拉雅软件播放' },
+              ] as const
+            ).map((o) => (
+              <button
+                key={o.key}
+                onClick={() => changePlatform(o.key)}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  platform === o.key
+                    ? 'border-indigo-400/70 bg-indigo-500/10'
+                    : 'border-white/10 bg-white/[0.03] hover:border-white/25'
+                }`}
+              >
+                <div className="text-xs font-medium text-zinc-100">
+                  {o.icon} {o.label}
+                </div>
+                <div className="mt-0.5 text-[10px] leading-tight text-zinc-500">{o.desc}</div>
+              </button>
+            ))}
+          </div>
+          {platform !== 'local' && (
+            <p className="mt-1.5 text-[11px] text-amber-300/80">
+              {platform === 'web'
+                ? '网页合集播放时用默认浏览器打开页面（无全屏置顶/进度记录），适合手动点播'
+                : '喜马拉雅合集播放时打开喜马拉雅客户端，并同时用浏览器打开音频页（客户端不支持命令行定位，页面可直接播放）'}
+            </p>
+          )}
+        </div>
+
+        {/* 添加方式（本地文件平台：文件夹/文件/直链解析；网页与喜马拉雅平台：直接添加链接） */}
+        {platform === 'local' ? (
         <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
           <div className="mb-2 text-xs text-zinc-400">添加内容（文件夹自动扫描排序 / 直链 / 合集地址展开）</div>
           <div className="flex flex-wrap gap-2">
@@ -217,6 +469,49 @@ function CollectionDialog({
               <FileSearch className="mr-1 h-3.5 w-3.5" /> 添加文件
             </Button>
           </div>
+          {scanningFolder && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" /> 正在扫描文件夹…
+            </div>
+          )}
+          {folderScan && (
+            <div className="mt-3 rounded-xl border border-indigo-400/20 bg-indigo-500/[0.06] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-zinc-200">文件夹导入预览</div>
+                  <div className="truncate text-[11px] text-zinc-500" title={folderScan.path}>
+                    {folderScan.path}
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => toggleAllFolderFiles(true)}>全选</Button>
+                  <Button size="sm" variant="ghost" onClick={() => toggleAllFolderFiles(false)}>清空</Button>
+                </div>
+              </div>
+              <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-white/5 bg-black/20">
+                {folderScan.files.map((f) => (
+                  <label key={f.path} className="flex cursor-pointer items-center gap-2 px-2 py-1.5 hover:bg-white/5">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 accent-indigo-500"
+                      checked={!!folderScan.checked[f.path]}
+                      onChange={() => toggleFolderFile(f.path)}
+                    />
+                    <span className="truncate text-xs text-zinc-300">{f.name}</span>
+                    <span className="ml-auto shrink-0 text-[10px] text-zinc-500">
+                      {f.isXimalaya ? '🎧 喜马拉雅' : f.kind === 'video' ? '🎬 视频' : '🎵 音频'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] text-zinc-500">
+                  共 {folderScan.files.length} 个文件，已选 {Object.values(folderScan.checked).filter(Boolean).length} 个
+                </span>
+                <Button size="sm" onClick={confirmFolderScan}>确认导入</Button>
+              </div>
+            </div>
+          )}
           <div className="mt-3 flex gap-2">
             <input
               value={urlInput}
@@ -230,9 +525,44 @@ function CollectionDialog({
           </div>
           {resolveResult && (
             <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs">
-              {resolveResult.isDirect || resolveResult.urls.length <= 1 ? (
+              {resolveResult.requires ? (
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-emerald-300">✓ 识别为视频直链</span>
+                  <span className="text-amber-300">解析需要补充条件（{resolveResult.requires.platform}）</span>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      setCookieDialog({
+                        open: true,
+                        url: urlInput.trim(),
+                        platform: resolveResult.requires!.platform,
+                        hint: resolveResult.requires!.hint,
+                      })
+                    }
+                  >
+                    填写条件
+                  </Button>
+                </div>
+              ) : resolveResult.error ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate text-amber-300" title={resolveResult.error}>
+                    ⚠️ 未能解析：{resolveResult.error}
+                  </span>
+                  <Button size="sm" variant="outline" onClick={confirmAddUrls}>
+                    按单个地址添加
+                  </Button>
+                </div>
+              ) : resolveResult.isDirect ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-emerald-300">🎯 资源直链{platformName(resolveResult.platform)}</span>
+                  <Button size="sm" onClick={confirmAddUrls}>
+                    添加
+                  </Button>
+                </div>
+              ) : resolveResult.urls.length <= 1 ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sky-300">
+                    📄 单资源链接（已解析出播放地址{platformName(resolveResult.platform)}）
+                  </span>
                   <Button size="sm" onClick={confirmAddUrls}>
                     添加
                   </Button>
@@ -241,20 +571,13 @@ function CollectionDialog({
                 <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-indigo-300">
-                      {resolveResult.platform === 'douyin-selected'
-                        ? '识别为抖音精选合集'
-                        : resolveResult.platform === 'bilibili'
-                          ? '识别为 B 站视频/合集'
-                          : resolveResult.platform === 'ximalaya'
-                            ? '识别为喜马拉雅'
-                            : '识别为合集地址'}
-                      ，已提取 {resolveResult.urls.length} 个视频：
+                      📚 合集页{platformName(resolveResult.platform)} · 已提取 {resolveResult.urls.length} 个资源：
                     </span>
                     <Button size="sm" onClick={confirmAddUrls}>
                       全部添加
                     </Button>
                   </div>
-                  {/* 视频名称 + URL 列表 */}
+                  {/* 资源名称 + URL 列表 */}
                   <div className="mt-2 max-h-44 divide-y divide-white/5 overflow-y-auto rounded-lg border border-white/10">
                     {(resolveResult.items ?? resolveResult.urls.map((u): { title?: string; url: string } => ({ url: u }))).map((it, i) => (
                       <div key={i} className="flex items-start gap-2 px-2 py-1.5">
@@ -278,6 +601,30 @@ function CollectionDialog({
             </div>
           )}
         </div>
+        ) : (
+        <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <div className="mb-2 text-xs text-zinc-400">
+            {platform === 'ximalaya'
+              ? '添加喜马拉雅音频链接（每行一个，如 https://www.ximalaya.com/sound/554453964）'
+              : '添加网页链接（每行一个，如抖音 / B 站视频页链接），播放时用浏览器打开'}
+          </div>
+          <textarea
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            rows={3}
+            placeholder={platform === 'ximalaya' ? 'https://www.ximalaya.com/sound/xxx' : 'https://…'}
+            className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-indigo-400/60"
+          />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <Button variant="outline" size="sm" onClick={addPageUrls} disabled={!urlInput.trim()}>
+              添加链接
+            </Button>
+            {items.length > 0 && (
+              <span className="text-[11px] text-zinc-500">已添加 {items.length} 个链接，播放时按顺序打开</span>
+            )}
+          </div>
+        </div>
+        )}
 
         {/* 条目列表（顺序 = 播放顺序，支持调整） */}
         <div className="mb-4">
@@ -301,6 +648,17 @@ function CollectionDialog({
                   {i.value}
                 </div>
                 <div className="flex shrink-0 gap-0.5">
+                  {i.type === 'folder' && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => void toggleFolderList(i.value)}
+                      title="查看文件列表"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -333,9 +691,35 @@ function CollectionDialog({
                 </div>
               </div>
             ))}
+            {expandedFolder && (
+              <div className="border-t border-white/5 px-3 py-2">
+                <div className="mb-1 text-[11px] font-medium text-zinc-400">
+                  📄 文件列表（{folderLists[expandedFolder]?.length ?? 0} 个，播放时自动扫描并按文件名排序）
+                </div>
+                {folderListLoading === expandedFolder ? (
+                  <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                    <RefreshCw className="h-3 w-3 animate-spin" /> 读取中…
+                  </div>
+                ) : (
+                  <div className="max-h-40 overflow-y-auto rounded-lg border border-white/5 bg-black/20">
+                    {(folderLists[expandedFolder] ?? []).map((f, i2) => (
+                      <div key={f.path} className="flex items-center gap-2 px-2 py-1 text-[11px]">
+                        <span className="w-5 shrink-0 text-right text-zinc-600">{i2 + 1}</span>
+                        <span className="min-w-0 flex-1 truncate text-zinc-300" title={f.path}>
+                          {f.name}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-zinc-500">
+                          {f.isXimalaya ? '🎧 喜马拉雅' : f.kind === 'video' ? '🎬 视频' : '🎵 音频'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <p className="mt-1 text-[11px] text-zinc-500">
-            文件夹条目会在播放时自动扫描其下全部音视频，并按文件名排序后插入对应位置。
+            导入文件夹会先解析出全部音视频文件，可勾选导入、删除或调整顺序；播放进度按条目记录（.xm 喜马拉雅音频用客户端播放）。
           </p>
         </div>
 
@@ -343,7 +727,12 @@ function CollectionDialog({
           <Button
             onClick={() => {
               if (!name.trim()) return toast.error('请输入合集名称');
-              onSave({ id: editing?.id, name: name.trim(), items });
+              if (items.length === 0) {
+                return toast.error(
+                  platform === 'local' ? '请至少添加一个内容条目（文件夹/文件/URL）' : '请至少添加一个网页链接',
+                );
+              }
+              onSave({ id: editing?.id, name: name.trim(), platform, items });
             }}
           >
             保存合集
@@ -359,8 +748,44 @@ function CollectionDialog({
             open
             onClose={() => setPicker(null)}
             pickMode={picker.mode}
-            title={picker.mode === 'folder' ? '选择文件夹（自动扫描音视频）' : '选择媒体文件'}
-            onPick={(p) => (picker.mode === 'folder' ? addFolder(p) : addFile(p))}
+            title={picker.mode === 'folder' ? '选择文件夹（导入前自动扫描音视频）' : '选择媒体文件'}
+            onPick={(p) => (picker.mode === 'folder' ? void addFolder(p) : addFile(p))}
+          />
+        )}
+
+        {/* 特殊渠道解析条件收集（喜马拉雅 Cookie） */}
+        {cookieDialog?.open && (
+          <CookieRequireDialog
+            open
+            platform={cookieDialog.platform}
+            hint={cookieDialog.hint}
+            onClose={() => setCookieDialog(null)}
+            onConfirm={(cookie) => void handleResolveWithCookie(cookie)}
+          />
+        )}
+
+        {/* 喜马拉雅浏览器辅助解析（防盗链直链需在已登录页面运行脚本回传） */}
+        {browserDialog?.open && (
+          <BrowserRequireDialog
+            open
+            platform={browserDialog.platform}
+            hint={browserDialog.hint}
+            token={browserDialog.payload.token}
+            trackIds={browserDialog.payload.trackIds}
+            onClose={() => setBrowserDialog(null)}
+            onAddItems={(items) => {
+              const adds = items.map((it) => ({
+                id: crypto.randomUUID(),
+                type: 'url' as const,
+                value: it.url,
+                title: it.title || undefined,
+              }));
+              setItems((prev) => [...prev, ...adds]);
+              toast.success(`喜马拉雅解析完成，共添加 ${adds.length} 个音频`);
+              setBrowserDialog(null);
+              setUrlInput('');
+              setResolveResult(null);
+            }}
           />
         )}
       </div>
@@ -459,6 +884,278 @@ function TimePickerDialog({
             }
           >
             确定
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 特殊渠道解析条件收集弹框（当前用于喜马拉雅：需登录 Cookie 才能解析） */
+function CookieRequireDialog({
+  open,
+  platform,
+  hint,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  platform: string;
+  hint: string;
+  onClose: () => void;
+  onConfirm: (cookie: string) => void;
+}) {
+  const [cookie, setCookie] = useState('');
+  const [showTip, setShowTip] = useState(true);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-2xl border border-white/10 bg-zinc-900/95 p-5 shadow-2xl backdrop-blur-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-100">解析需要 Cookie（{platform}）</h3>
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300">✕</button>
+        </div>
+
+        <div className="mb-4 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2.5 text-xs leading-relaxed text-amber-200/90">
+          {hint}
+        </div>
+
+        <div className="mb-2 flex items-center justify-between">
+          <label className="text-xs text-zinc-400">Cookie（浏览器登录后 F12 → Application → Cookies → 复制整段值）</label>
+          <button
+            type="button"
+            onClick={() => setShowTip((v) => !v)}
+            className="text-[11px] text-indigo-400 hover:text-indigo-300"
+          >
+            {showTip ? '收起步骤' : '查看步骤'}
+          </button>
+        </div>
+
+        {showTip && (
+          <ol className="mb-3 list-decimal space-y-1 pl-4 text-[11px] leading-relaxed text-zinc-500">
+            <li>用浏览器（Chrome/Edge）打开并登录喜马拉雅 www.ximalaya.com</li>
+            <li>按 F12 打开开发者工具 → 切换到 Application（应用）面板</li>
+            <li>左侧 Storage → Cookies → 选择 https://www.ximalaya.com</li>
+            <li>找到任意一项 Cookie，把整段 Cookie 值（多行）复制到下方输入框</li>
+          </ol>
+        )}
+
+        <textarea
+          value={cookie}
+          onChange={(e) => setCookie(e.target.value)}
+          rows={6}
+          placeholder="粘贴 Cookie，例如：_xm_tk=...; web_token=...; ..."
+          className="w-full resize-none rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-indigo-400/60"
+        />
+
+        <p className="mt-2 text-[11px] text-zinc-500">
+          Cookie 仅用于解析音频直链，解析成功后会自动保存，下次解析无需重复填写（可在服务端设置文件中删除）。
+        </p>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>取消</Button>
+          <Button
+            size="sm"
+            disabled={!cookie.trim()}
+            onClick={() => onConfirm(cookie.trim())}
+          >
+            填入并重新解析
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 浏览器辅助解析弹框（喜马拉雅防盗链：Node 后端直连被风控拦截，
+ * 需用户在已登录的喜马拉雅页面 Console 运行脚本，脚本取直链并回传）。
+ */
+function BrowserRequireDialog({
+  open,
+  platform,
+  hint,
+  token,
+  trackIds,
+  onClose,
+  onAddItems,
+}: {
+  open: boolean;
+  platform: string;
+  hint: string;
+  token: string;
+  trackIds: { id: string; title: string }[];
+  onClose: () => void;
+  onAddItems: (items: { title?: string; url: string }[]) => void;
+}) {
+  const [script, setScript] = useState('');
+  const [fetching, setFetching] = useState(false);
+  const [collecting, setCollecting] = useState(false);
+  const [failed, setFailed] = useState<{ id: string; title: string; err?: string }[]>([]);
+
+  useEffect(() => {
+    if (open) {
+      setScript('');
+      setFailed([]);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  /** 第一步：在已登录的喜马拉雅页面打开任一声音页（脚本在同源页面才能带登录态取直链） */
+  const openXimalayaPage = () => {
+    const firstId = trackIds[0]?.id;
+    window.open(
+      firstId
+        ? `https://www.ximalaya.com/sound/${firstId}`
+        : 'https://www.ximalaya.com/',
+      '_blank',
+      'noopener',
+    );
+  };
+
+  /** 第二步：获取解析脚本并复制 */
+  const fetchScript = async () => {
+    setFetching(true);
+    try {
+      const base = window.location.origin;
+      const r = await childTvApi.childTvXimalayaScript(token, base);
+      setScript(r.script);
+      try {
+        await navigator.clipboard.writeText(r.script);
+        toast.success('脚本已复制到剪贴板，到喜马拉雅页面按 F12 → Console 粘贴回车运行');
+      } catch {
+        toast.success('脚本已生成，请手动复制下方脚本');
+      }
+    } catch (e) {
+      toast.error(extractApiError(e, '获取脚本失败'));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  /** 第三步：脚本运行并回传后，拉取解析结果 */
+  const collect = async () => {
+    if (!script) {
+      // 未生成脚本也允许直接拉取（脚本可能在其他标签页运行过）
+    }
+    setCollecting(true);
+    try {
+      const r = await childTvApi.childTvXimalayaPending(token);
+      if (r.items.length > 0) {
+        onAddItems(r.items);
+      } else {
+        setFailed(r.failed);
+        toast.error(`尚未收到直链${r.failed.length > 0 ? `（失败 ${r.failed.length} 条）` : ''}，请确认脚本已运行后重试`);
+      }
+    } catch (e) {
+      toast.error(extractApiError(e, '查询结果失败'));
+    } finally {
+      setCollecting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl rounded-2xl border border-white/10 bg-zinc-900/95 p-5 shadow-2xl backdrop-blur-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-100">浏览器辅助解析（{platform}）</h3>
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300">✕</button>
+        </div>
+
+        <div className="mb-3 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2.5 text-xs leading-relaxed text-amber-200/90">
+          {hint}
+        </div>
+
+        <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+          <div className="mb-1 text-xs text-zinc-400">
+            待解析 {trackIds.length} 个音频：
+          </div>
+          <ul className="max-h-32 space-y-0.5 overflow-y-auto text-[11px] text-zinc-300">
+            {trackIds.slice(0, 30).map((t, i) => (
+              <li key={t.id} className="truncate">
+                {i + 1}. {t.title || `音频 ${t.id}`}
+              </li>
+            ))}
+            {trackIds.length > 30 && <li className="text-zinc-500">…共 {trackIds.length} 个</li>}
+          </ul>
+        </div>
+
+        <ol className="mb-4 space-y-2 pl-4 text-xs leading-relaxed text-zinc-400">
+          <li>
+            <span className="text-zinc-300">① 打开已登录的喜马拉雅页面</span>
+            <span className="ml-2 text-zinc-600">（脚本需在 www.ximalaya.com 同源页面运行才能带登录态取直链）</span>
+          </li>
+          <li>
+            <span className="text-zinc-300">② 获取并复制解析脚本</span>
+            <span className="ml-2 text-zinc-600">（喜马拉雅页面按 F12 → Console → 粘贴回车运行，等待完成弹窗）</span>
+          </li>
+          <li>
+            <span className="text-zinc-300">③ 点击「我已运行脚本」拉取结果</span>
+          </li>
+        </ol>
+
+        {failed.length > 0 && (
+          <div className="mb-3 max-h-28 overflow-y-auto rounded-lg border border-red-400/20 bg-red-400/[0.06] px-3 py-2 text-[11px] text-red-300/90">
+            <div className="mb-1 font-medium">以下音频未获取到直链：</div>
+            {failed.map((f) => (
+              <div key={f.id} className="truncate">
+                {f.title || `音频 ${f.id}`}：{f.err || '未获取到直链'}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {script && (
+          <div className="mb-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] text-zinc-500">解析脚本（自动复制，可手动复制）：</span>
+              <button
+                type="button"
+                className="text-[11px] text-indigo-400 hover:text-indigo-300"
+                onClick={() => {
+                  void navigator.clipboard.writeText(script).then(
+                    () => toast.success('已复制脚本'),
+                    () => toast.error('复制失败，请手动复制'),
+                  );
+                }}
+              >
+                重新复制
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={script}
+              rows={8}
+              className="w-full resize-none rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-100 outline-none"
+            />
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>关闭</Button>
+          <Button variant="outline" size="sm" onClick={openXimalayaPage}>
+            打开喜马拉雅页面
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void fetchScript()} disabled={fetching}>
+            {fetching ? '生成中…' : script ? '重新生成脚本' : '获取并复制解析脚本'}
+          </Button>
+          <Button size="sm" onClick={() => void collect()} disabled={collecting}>
+            {collecting ? '查询中…' : '我已运行脚本，拉取结果'}
           </Button>
         </div>
       </div>
@@ -632,7 +1329,9 @@ export default function ChildTvAdminPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [form, setForm] = useState<ScheduleForm>(EMPTY_FORM);
+  const [playMode, setPlayMode] = useState<'schedule' | 'collection'>('schedule');
   const [selectedPlayId, setSelectedPlayId] = useState('');
+  const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [weekFilter, setWeekFilter] = useState<'all' | number>('all');
   const [collectionDialog, setCollectionDialog] = useState<{ open: boolean; editing: ChildTvCollection | null }>({
     open: false,
@@ -785,10 +1484,15 @@ export default function ChildTvAdminPage() {
 
   // ===== 合集 CRUD =====
   const saveCollectionMutation = useMutation({
-    mutationFn: (dto: { id?: string; name: string; items: ChildTvCollection['items'] }) =>
+    mutationFn: (dto: {
+      id?: string;
+      name: string;
+      platform?: ChildTvCollection['platform'];
+      items: ChildTvCollection['items'];
+    }) =>
       dto.id
-        ? childTvApi.childTvUpdateCollection(dto.id, { name: dto.name, items: dto.items })
-        : childTvApi.childTvCreateCollection({ name: dto.name, items: dto.items }),
+        ? childTvApi.childTvUpdateCollection(dto.id, { name: dto.name, platform: dto.platform, items: dto.items })
+        : childTvApi.childTvCreateCollection({ name: dto.name, platform: dto.platform, items: dto.items }),
     onSuccess: () => {
       toast.success('合集已保存');
       queryClient.invalidateQueries({ queryKey: ['child-tv-collections'] });
@@ -823,7 +1527,8 @@ export default function ChildTvAdminPage() {
 
   // ===== 控制 =====
   const playMutation = useMutation({
-    mutationFn: (id: string) => childTvApi.childTvPlay(id),
+    mutationFn: (dto: { scheduleId?: string; collectionId?: string; entryIndex?: number }) =>
+      childTvApi.childTvPlay(dto),
     onSuccess: (s) => {
       toast.success(`正在播放：${s.currentTitle || '内容'}`);
       refresh();
@@ -992,6 +1697,44 @@ export default function ChildTvAdminPage() {
                     {status.currentTitle || '-'}
                   </span>
                 </div>
+                {status.currentIndex !== null && status.totalCount ? (
+                  <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-4 py-3">
+                    <span className="text-zinc-400">当前集</span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        disabled={status.currentIndex <= 0 || playMutation.isPending}
+                        onClick={() =>
+                          playMutation.mutate({
+                            collectionId: status.currentCollectionId ?? undefined,
+                            entryIndex: (status.currentIndex ?? 0) - 1,
+                          })
+                        }
+                      >
+                        <ChevronLeft className="mr-0.5 h-3.5 w-3.5" /> 上一集
+                      </Button>
+                      <span className="min-w-[3.5rem] text-center text-sm font-medium text-zinc-100">
+                        第 {status.currentIndex + 1}/{status.totalCount} 集
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        disabled={status.currentIndex >= status.totalCount - 1 || playMutation.isPending}
+                        onClick={() =>
+                          playMutation.mutate({
+                            collectionId: status.currentCollectionId ?? undefined,
+                            entryIndex: (status.currentIndex ?? 0) + 1,
+                          })
+                        }
+                      >
+                        下一集 <ChevronRight className="ml-0.5 h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-4 py-3">
                   <span className="text-zinc-400">剩余</span>
                   <span className="font-medium text-zinc-100">
@@ -1022,6 +1765,11 @@ export default function ChildTvAdminPage() {
                 {status?.mpv === 'running' ? 'mpv 运行中' : status?.mpvAvailable ? '就绪' : '未安装'}
               </span>
             </div>
+            {status?.audioFallback && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+                音频输出设备不可用，已自动切换为静音播放：视频画面正常、无声音；如需声音请修复系统音频（管理员重启 Windows 音频服务或检查声卡驱动/音箱连接）。
+              </div>
+            )}
             <div className="truncate rounded-lg bg-white/[0.03] px-4 py-2 text-xs text-zinc-500">
               最近日志：{status?.lastLog || '-'}
             </div>
@@ -1034,28 +1782,70 @@ export default function ChildTvAdminPage() {
           </h3>
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-xs text-zinc-400">立即播放时段</label>
-              <div className="flex gap-2">
-                <select
-                  value={selectedPlayId}
-                  onChange={(e) => setSelectedPlayId(e.target.value)}
-                  className="flex-1 rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
-                >
-                  <option value="">选择要播放的时段...</option>
-                  {schedules.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}（{s.start} · {s.collectionName || '合集'}）
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  variant="outline"
-                  onClick={() => selectedPlayId && playMutation.mutate(selectedPlayId)}
-                  disabled={!selectedPlayId || playMutation.isPending}
-                >
-                  <Play className="mr-1 h-3.5 w-3.5" /> 播放
-                </Button>
+              <label className="mb-1 block text-xs text-zinc-400">立即播放</label>
+              <div className="mb-2 flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
+                {(
+                  [
+                    ['schedule', '按时间段'],
+                    ['collection', '按合集'],
+                  ] as const
+                ).map(([m, label]) => (
+                  <button
+                    key={m}
+                    onClick={() => setPlayMode(m)}
+                    className={`flex-1 rounded-md px-2.5 py-1 text-xs transition-colors ${
+                      playMode === m ? 'bg-indigo-500/20 text-indigo-200' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
+              {playMode === 'schedule' ? (
+                <div className="flex gap-2">
+                  <select
+                    value={selectedPlayId}
+                    onChange={(e) => setSelectedPlayId(e.target.value)}
+                    className="flex-1 rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                  >
+                    <option value="">选择要播放的时段...</option>
+                    {schedules.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}（{s.start} · {s.collectionName || '合集'}）
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="outline"
+                    onClick={() => selectedPlayId && playMutation.mutate({ scheduleId: selectedPlayId })}
+                    disabled={!selectedPlayId || playMutation.isPending}
+                  >
+                    <Play className="mr-1 h-3.5 w-3.5" /> 播放
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <select
+                    value={selectedCollectionId}
+                    onChange={(e) => setSelectedCollectionId(e.target.value)}
+                    className="flex-1 rounded-lg border border-white/10 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-indigo-400/60"
+                  >
+                    <option value="">选择要播放的合集...</option>
+                    {collections.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}（{c.platform === 'ximalaya' ? '喜马拉雅' : c.platform === 'web' ? '网页' : '本地'}，{c.items?.length ?? 0} 项）
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="outline"
+                    onClick={() => selectedCollectionId && playMutation.mutate({ collectionId: selectedCollectionId })}
+                    disabled={!selectedCollectionId || playMutation.isPending}
+                  >
+                    <Play className="mr-1 h-3.5 w-3.5" /> 播放
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 gap-3">
@@ -1173,7 +1963,12 @@ export default function ChildTvAdminPage() {
             {collections.map((c) => (
               <div key={c.id} className="flex flex-wrap items-center gap-3 px-6 py-3">
                 <div className="min-w-[140px]">
-                  <div className="text-sm font-medium text-zinc-100">{c.name}</div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+                    {c.name}
+                    <Badge variant={c.platform === 'ximalaya' ? 'default' : 'outline'} className="shrink-0 text-[10px]">
+                      {c.platform === 'ximalaya' ? '🎧 喜马拉雅' : c.platform === 'web' ? '🌐 网页' : '📁 本地'}
+                    </Badge>
+                  </div>
                   <div className="text-xs text-zinc-500">{c.items.length} 个条目</div>
                 </div>
                 <div className="min-w-0 flex-1 truncate text-xs text-zinc-500">
@@ -1392,7 +2187,7 @@ export default function ChildTvAdminPage() {
                   <option value="">选择合集…</option>
                   {collections.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}（{c.items.length} 项）
+                      {c.name}（{c.platform === 'ximalaya' ? '喜马拉雅' : c.platform === 'web' ? '网页' : '本地'}，{c.items.length} 项）
                     </option>
                   ))}
                 </select>

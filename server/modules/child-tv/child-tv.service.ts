@@ -27,6 +27,7 @@ import type {
   ChildTvRuntimeStatus,
   ChildTvSchedule,
   ChildTvScheduleInput,
+  ChildTvScanResult,
   ChildTvSettings,
   ChildTvStatsEntry,
 } from '@shared/api.interface';
@@ -34,7 +35,9 @@ import type {
 /** 媒体扩展名分类 */
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.webm', '.m4v', '.ts', '.m2ts']);
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.opus', '.wma']);
-const MEDIA_EXTS = new Set([...VIDEO_EXTS, ...AUDIO_EXTS]);
+/** 喜马拉雅客户端私有音频格式：用喜马拉雅客户端打开播放（关联命令 喜马拉雅.exe "%1"） */
+const XIMALAYA_EXTS = new Set(['.xm']);
+const MEDIA_EXTS = new Set([...VIDEO_EXTS, ...AUDIO_EXTS, ...XIMALAYA_EXTS]);
 
 /** 账号（单账号体系：admin 家长账号，密码 sha256 加盐存储） */
 interface ChildTvAccount {
@@ -56,6 +59,13 @@ interface AuthFile {
   updatedAt: string;
 }
 
+/** 喜马拉雅浏览器辅助解析的暂存条目（token → 待解析列表 + 已回传直链） */
+interface XimalayaPendingEntry {
+  trackIds: { id: string; title: string }[];
+  collected: { id: string; title?: string; url: string }[];
+  createdAt: number;
+}
+
 interface PlayerSession {
   proc: ChildProcess;
   scheduleId: string | null;
@@ -69,6 +79,10 @@ interface PlayerSession {
   collectionId: string | null;
   /** mpv IPC 通道（Windows 命名管道 / unix socket） */
   ipcPath: string | null;
+  /** 是否已因音频设备不可用降级为静音播放（--ao=null） */
+  audioFallback: boolean;
+  /** mpv 播放列表第 i 项在合集完整条目列表中的索引（playlist-pos → 完整列表索引映射，混合 xm/mpv 合集用） */
+  mpvToFull: number[] | null;
 }
 
 /** 合集播放进度：记录上次播放到的条目索引（0-based），下次播放该合集时从进度处继续 */
@@ -77,6 +91,28 @@ interface ChildTvCollectionProgress {
   collectionId: string;
   entryIndex: number;
   updatedAt: string;
+}
+
+/**
+ * 外部播放会话：
+ * - web：浏览器打开页面播放（platform=web 合集）
+ * - ximalaya：喜马拉雅客户端 + 浏览器兜底（platform=ximalaya 合集）
+ * - ximalaya-local：喜马拉雅客户端打开本地 .xm 文件（local 合集中的 xm 条目）
+ * 不经过 mpv，仅用于状态展示、到时停止与统计；ximalaya-local 会记录"播到第几集"进度
+ */
+interface ExternalPlaySession {
+  type: 'web' | 'ximalaya' | 'ximalaya-local';
+  title: string;
+  /** web/ximalaya 为页面 URL；ximalaya-local 为本地 .xm 文件路径 */
+  pageUrl: string;
+  startedAt: string;
+  endsAt: string;
+  manual: boolean;
+  collectionId: string;
+  /** ximalaya-local：合集 xm 条目列表（窗口标题 → 条目匹配，用于同步播放进度） */
+  entries?: Array<{ title: string; path: string; fullIndex: number }>;
+  /** ximalaya-local：当前已记录的条目索引 */
+  entryIndex?: number;
 }
 
 const M3U_FILE = 'child-tv-playlist.m3u';
@@ -108,6 +144,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   private static readonly LOGIN_LOCK_MS = 15 * 60 * 1000;
 
   private player: PlayerSession | null = null;
+  /** 外部播放会话（web/ximalaya 合集，不使用 mpv） */
+  private externalPlay: ExternalPlaySession | null = null;
   private tickTimer: NodeJS.Timeout | null = null;
   private lastLog = '';
   private mpvPathCached: string | null | undefined;
@@ -390,6 +428,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       pinHash: null,
       immediatePlayDurationMinutes: 120,
       mpvPath: '',
+      ximalayaCookie: '',
     };
   }
 
@@ -693,6 +732,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     const row: ChildTvCollection = {
       id: crypto.randomUUID(),
       name,
+      platform: dto.platform ?? 'local',
       items: this.normalizeItems(dto.items ?? []),
       createdAt: now,
       updatedAt: now,
@@ -714,6 +754,7 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       existing.name = name;
     }
     if (dto.items !== undefined) existing.items = this.normalizeItems(dto.items);
+    if (dto.platform !== undefined) existing.platform = dto.platform;
     const updated = this.collectionsStore.update(id, {
       ...existing,
       updatedAt: new Date().toISOString(),
@@ -738,6 +779,10 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     }
     const removed = this.collectionsStore.remove(id);
     if (!removed) throw new NotFoundException('合集不存在');
+    // 清理该合集的播放进度记录，避免孤儿数据
+    for (const p of this.progressStore.findAll().filter((x) => x.collectionId === id)) {
+      this.progressStore.remove(p.id);
+    }
     this.log(
       'info',
       `删除合集「${removed.name}」${detached.length ? `，已解除时段绑定：${detached.join('、')}` : ''}`,
@@ -758,15 +803,15 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       }));
   }
 
-  /** 解析 URL：直链直接返回；疑似合集页抓取并提取视频地址列表 */
-  async resolveCollectionUrl(url: string): Promise<ChildTvResolveUrlResult> {
+  /** 解析 URL：直链直接返回；疑似合集页抓取并提取视频地址列表。cookie 为调用方临时补充的登录态（成功后存入设置复用） */
+  async resolveCollectionUrl(url: string, cookie?: string): Promise<ChildTvResolveUrlResult> {
     const u = url?.trim();
     if (!u) throw new BadRequestException('URL 不能为空');
     if (!/^https?:\/\//i.test(u)) throw new BadRequestException('URL 需以 http:// 或 https:// 开头');
-    return this.expandUrl(u);
+    return this.expandUrl(u, cookie);
   }
 
-  private async expandUrl(url: string): Promise<ChildTvResolveUrlResult> {
+  private async expandUrl(url: string, cookie?: string): Promise<ChildTvResolveUrlResult> {
     // 1. 直链判断（媒体扩展名 / m3u8 / CDN 签名直链：抖音等 URL 无扩展名但带 mime_type 参数）
     const pathOnly = url.split(/[?#]/)[0];
     const ext = path.extname(pathOnly).toLowerCase();
@@ -775,8 +820,53 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       return { isDirect: true, urls: [url], items: [{ url }], platform: 'direct' };
     }
     // 2. 公共链接解析器：按平台识别 → 平台 provider 解析（抖音/抖音精选/B 站/喜马拉雅/通用兜底）
+    //    平台需要 Cookie 时：先用设置里已保存的 Cookie，调用方临时传入的 Cookie 优先
+    const savedCookie = this.readSettings().ximalayaCookie;
+    const useCookie = (cookie?.trim() || savedCookie) || undefined;
     try {
-      const r = await defaultUrlResolver.resolve(url);
+      const r = await defaultUrlResolver.resolve(url, useCookie ? { cookie: useCookie } : undefined);
+      // 平台需要补充条件 → 透出 requires 提示
+      if (r.requires) {
+        if (r.requires.kind === 'browser') {
+          // 浏览器辅助模式：生成一次性 token 并暂存待解析条目，脚本回传直链时校验
+          const token = crypto.randomUUID();
+          const pending = this.readXimalayaPending();
+          pending[token] = {
+            trackIds: r.requires.payload?.trackIds ?? [],
+            collected: [],
+            createdAt: Date.now(),
+          };
+          this.writeXimalayaPending(pending);
+          return {
+            isDirect: false,
+            urls: [url],
+            items: [],
+            platform: r.platform,
+            requires: {
+              ...r.requires,
+              payload: { ...r.requires.payload, token },
+            },
+          };
+        }
+        return {
+          isDirect: false,
+          urls: [url],
+          items: [],
+          platform: r.platform,
+          requires: r.requires,
+        };
+      }
+      // 带 Cookie 解析成功 → 记住 Cookie（下次解析自动带上，不必每次填写）
+      if (cookie?.trim() && r.items.length > 0) {
+        try {
+          const cur = this.readSettings();
+          if (cur.ximalayaCookie !== cookie.trim()) {
+            this.writeSettings({ ...cur, ximalayaCookie: cookie.trim() });
+          }
+        } catch {
+          /* 保存失败不影响解析结果 */
+        }
+      }
       const items = r.items.map((it) => ({ title: it.title, url: it.url }));
       return {
         isDirect: r.isDirect,
@@ -792,6 +882,116 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
         error: `解析失败（${e instanceof Error ? e.message : String(e)}），将按单个地址尝试播放`,
       };
     }
+  }
+
+  // ==================== 喜马拉雅 · 浏览器辅助解析 ====================
+  // 喜马拉雅防盗链：baseInfo 直链接口有 WAF 指纹风控，Node 后端直连恒 1001；
+  // 需用户在已登录的喜马拉雅页面（www.ximalaya.com）Console 运行脚本，
+  // 脚本在同源页面取直链（自动带登录态 + 页面解密库）并回传本服务。
+
+  private readonly ximalayaPendingFile = path.join(this.dataDir, 'ximalaya-pending.json');
+
+  private readXimalayaPending(): Record<string, XimalayaPendingEntry> {
+    return this.readJson(this.ximalayaPendingFile, {});
+  }
+
+  private writeXimalayaPending(map: Record<string, XimalayaPendingEntry>): void {
+    this.writeJson(this.ximalayaPendingFile, map);
+  }
+
+  /** 生成浏览器辅助脚本（用户在已登录的喜马拉雅页面 Console 粘贴运行） */
+  getXimalayaScript(token: string, baseUrl: string): { script: string } {
+    const pending = this.readXimalayaPending();
+    const entry = pending[token];
+    if (!entry || entry.trackIds.length === 0) {
+      throw new BadRequestException('令牌无效或已过期，请重新发起解析');
+    }
+    const tracksJson = JSON.stringify(entry.trackIds);
+    const endpoint = `${baseUrl.replace(/\/+$/, '')}/api/child-tv/ximalaya/collect`;
+    const script = `(async () => {
+  var TOKEN = ${JSON.stringify(token)};
+  var ENDPOINT = ${JSON.stringify(endpoint)};
+  var TRACKS = ${tracksJson};
+  var CJ = window.DUCryptoJS;
+  if (!CJ) { alert('未检测到解密库：请确认当前页面是已登录的喜马拉雅页面 www.ximalaya.com（声音/专辑页均可）'); return; }
+  var KEY = CJ.enc.Hex.parse('aaad3e4fd540b0f79dca95606e72bf93');
+  var results = [];
+  for (var i = 0; i < TRACKS.length; i++) {
+    var t = TRACKS[i];
+    try {
+      var r = await fetch('https://www.ximalaya.com/mobile-playpage/track/v3/baseInfo/' + Date.now() + '?device=web&trackId=' + t.id + '&trackQualityLevel=1', { credentials: 'include' });
+      var j = await r.json();
+      var list = j && j.trackInfo && j.trackInfo.playUrlList;
+      if (!list || !list.length) { results.push({ id: t.id, err: '无播放地址(ret=' + (j && j.ret) + ')' }); console.log('[x]', t.title.slice(0, 20), 'ret=' + (j && j.ret)); continue; }
+      var dec = '';
+      try {
+        dec = CJ.AES.decrypt({ ciphertext: CJ.enc.Base64.parse(String(list[0].url).replace(/-/g, '+').replace(/_/g, '/')) }, KEY, { mode: CJ.mode.ECB, padding: CJ.pad.Pkcs7 }).toString(CJ.enc.Utf8);
+      } catch (e2) { dec = ''; }
+      if (!dec || !/^https?:/.test(dec)) { results.push({ id: t.id, err: '解密失败' }); console.log('[x]', t.title.slice(0, 20), '解密失败'); continue; }
+      results.push({ id: t.id, title: t.title, url: dec });
+      console.log('[' + (i + 1) + '/' + TRACKS.length + '] OK', t.title.slice(0, 20), dec.slice(0, 60) + '...');
+    } catch (e) { results.push({ id: t.id, err: e.message }); console.log('[x]', t.title.slice(0, 20), e.message); }
+  }
+  var ok = results.filter(function (x) { return x.url; }).length;
+  try {
+    var form = new URLSearchParams();
+    form.set('token', TOKEN);
+    form.set('payload', JSON.stringify(results));
+    await fetch(ENDPOINT, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString() });
+    alert('喜马拉雅解析完成：成功 ' + ok + ' 条' + (ok < TRACKS.length ? '，失败 ' + (TRACKS.length - ok) + ' 条（详情见控制台）' : ''));
+  } catch (e) { alert('回传失败：' + e.message + '（请检查服务是否在运行）'); }
+})();`;
+    return { script };
+  }
+
+  /** 脚本回传直链：校验令牌与地址白名单后暂存（一次性，1 小时有效） */
+  collectXimalayaResults(token: string, payload: string): { ok: boolean; message: string } {
+    const pending = this.readXimalayaPending();
+    const entry = pending[token];
+    if (!entry) throw new BadRequestException('令牌无效或已过期，请重新发起解析');
+    if (Date.now() - entry.createdAt > 3600_000) {
+      throw new BadRequestException('令牌已过期（1 小时），请重新发起解析');
+    }
+    let results: { id?: string; title?: string; url?: string }[] = [];
+    try {
+      results = JSON.parse(payload || '[]') as { id?: string; title?: string; url?: string }[];
+      if (!Array.isArray(results)) throw new Error('not array');
+    } catch {
+      throw new BadRequestException('回传数据格式错误');
+    }
+    const validIds = new Set(entry.trackIds.map((t) => t.id));
+    const collected: { id: string; title?: string; url: string }[] = [];
+    for (const r of results) {
+      if (!r.id || !validIds.has(String(r.id))) continue;
+      if (r.url && /^https:\/\//i.test(r.url) && /xmcdn\.com/i.test(r.url)) {
+        collected.push({ id: String(r.id), title: r.title || undefined, url: r.url });
+      }
+    }
+    entry.collected = collected;
+    pending[token] = entry;
+    this.writeXimalayaPending(pending);
+    return { ok: true, message: `已接收 ${collected.length}/${entry.trackIds.length} 条直链` };
+  }
+
+  /** 查询浏览器辅助解析结果（前端"我已运行脚本"后拉取，按原顺序返回） */
+  getXimalayaPendingResult(
+    token: string,
+  ): { items: { title?: string; url: string }[]; failed: { id: string; title: string; err?: string }[] } {
+    const pending = this.readXimalayaPending();
+    const entry = pending[token];
+    if (!entry) throw new BadRequestException('令牌无效或已过期，请重新发起解析');
+    const byId = new Map(entry.collected.map((c) => [c.id, c]));
+    const items: { title?: string; url: string }[] = [];
+    const failed: { id: string; title: string; err?: string }[] = [];
+    for (const t of entry.trackIds) {
+      const c = byId.get(t.id);
+      if (c) {
+        items.push({ title: c.title || t.title, url: c.url });
+      } else {
+        failed.push({ id: t.id, title: t.title, err: '未获取到直链' });
+      }
+    }
+    return { items, failed };
   }
 
   // ==================== 时段 ====================
@@ -990,8 +1190,11 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   // ==================== 播放 ====================
 
   /** 按合集展开播放列表：folder 递归扫描按文件名排序、file 单文件、url 直链/合集解析 */
-  private async resolveCollectionPlaylist(collection: ChildTvCollection): Promise<{ entries: Array<{ title: string; target: string }>; skipped: string[] }> {
-    const entries: Array<{ title: string; target: string }> = [];
+  private async resolveCollectionPlaylist(collection: ChildTvCollection): Promise<{
+    entries: Array<{ title: string; target: string; isXimalaya: boolean }>;
+    skipped: string[];
+  }> {
+    const entries: Array<{ title: string; target: string; isXimalaya: boolean }> = [];
     const skipped: string[] = [];
     for (const item of collection.items) {
       if (item.type === 'folder') {
@@ -1021,14 +1224,22 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
           continue;
         }
         for (const f of files) {
-          entries.push({ title: path.basename(f), target: f });
+          entries.push({
+            title: path.basename(f),
+            target: f,
+            isXimalaya: XIMALAYA_EXTS.has(path.extname(f).toLowerCase()),
+          });
         }
       } else if (item.type === 'file') {
         if (!fs.existsSync(item.value)) {
           skipped.push(`${item.value}（文件不存在）`);
           continue;
         }
-        entries.push({ title: item.title || path.basename(item.value), target: item.value });
+        entries.push({
+          title: item.title || path.basename(item.value),
+          target: item.value,
+          isXimalaya: XIMALAYA_EXTS.has(path.extname(item.value).toLowerCase()),
+        });
       } else if (item.type === 'url') {
         // URL：尝试解析（直链 or 合集页展开）；解析失败仍保留原地址尝试播放
         // 解析结果带标题（视频名）时用标题命名播放条目，m3u 显示视频名称；
@@ -1046,15 +1257,26 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
           urls = [{ url: item.value, title: item.title }];
         }
         for (const u of urls) {
-          entries.push({ title: u.title || u.url, target: u.url });
+          entries.push({ title: u.title || u.url, target: u.url, isXimalaya: false });
         }
       }
     }
     return { entries, skipped };
   }
 
-  /** 解析时段播放资源（按合集生成 m3u 循环播放列表） */
-  private async resolveResource(s: ChildTvSchedule): Promise<{ title: string; args: string[] }> {
+  /** 解析时段播放资源：mpv 条目生成 m3u；xm 条目分离（喜马拉雅客户端打开），进度按合集完整条目索引记录 */
+  private async resolveResource(s: ChildTvSchedule, overrideStart?: number): Promise<{
+    title: string;
+    args: string[];
+    /** mpv 列表第 i 项在完整条目列表中的索引（playlist-pos → 完整索引映射） */
+    mpvToFull: number[];
+    /** 喜马拉雅 xm 条目（按完整列表顺序） */
+    xmFiles: Array<{ title: string; path: string; fullIndex: number }>;
+    /** 完整条目数 */
+    fullCount: number;
+    /** 上次播放到的完整列表索引（续播起点，0 = 从头） */
+    fullStart: number;
+  }> {
     const collection = this.collectionsStore.findAll().find((c) => c.id === s.collectionId);
     if (!collection) throw new BadRequestException(`时段「${s.name}」关联的合集不存在，请重新选择合集`);
     const { entries, skipped } = await this.resolveCollectionPlaylist(collection);
@@ -1066,30 +1288,60 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     if (skipped.length > 0) {
       this.log('warn', `合集「${collection.name}」部分条目跳过：${skipped.join('；')}`);
     }
-    const m3u = path.join(this.dataDir, M3U_FILE);
-    fs.writeFileSync(
-      m3u,
-      entries.map((e) => `#EXTINF:0,${e.title}\n${e.target}`).join('\n'),
-      'utf-8',
-    );
-    // B 站解析出的直链（upos/bilivideo CDN）播放时必须带 Referer，否则返回 403
-    const args: string[] = [m3u, '--loop-playlist=inf'];
-    if (entries.some((e) => /bilivideo\.com|bilibili\.com/i.test(e.target))) {
-      args.push('--http-header-fields=Referer:https://www.bilibili.com');
-    }
-    // 合集播放进度续播：上次播放到的条目索引（0-based），用 --playlist-start 从该条目继续
+    // 分离 mpv 条目与喜马拉雅 xm 条目（进度索引统一用完整条目列表）
+    const mpvToFull: number[] = [];
+    const xmFiles: Array<{ title: string; path: string; fullIndex: number }> = [];
+    const mpvEntries: Array<{ title: string; target: string }> = [];
+    entries.forEach((e, idx) => {
+      if (e.isXimalaya) xmFiles.push({ title: e.title, path: e.target, fullIndex: idx });
+      else {
+        mpvEntries.push({ title: e.title, target: e.target });
+        mpvToFull.push(idx);
+      }
+    });
+
     const progress = this.progressStore.findAll().find((p) => p.collectionId === collection.id);
-    if (progress && progress.entryIndex > 0 && progress.entryIndex < entries.length) {
-      args.push(`--playlist-start=${progress.entryIndex}`);
-      this.log('info', `合集「${collection.name}」从第 ${progress.entryIndex + 1} 项续播（共 ${entries.length} 项）`);
+    // 指定起点（上一集/下一集/按集播放）优先；否则用上次播放进度
+    const fullStart =
+      overrideStart !== undefined
+        ? overrideStart >= 0 && overrideStart < entries.length
+          ? overrideStart
+          : 0
+        : progress && progress.entryIndex > 0 && progress.entryIndex < entries.length
+          ? progress.entryIndex
+          : 0;
+
+    const args: string[] = [];
+    if (mpvEntries.length > 0) {
+      const m3u = path.join(this.dataDir, M3U_FILE);
+      fs.writeFileSync(
+        m3u,
+        mpvEntries.map((e) => `#EXTINF:0,${e.title}\n${e.target}`).join('\n'),
+        'utf-8',
+      );
+      args.push(m3u, '--loop-playlist=inf');
+      // B 站解析出的直链（upos/bilivideo CDN）播放时必须带 Referer，否则返回 403
+      if (mpvEntries.some((e) => /bilivideo\.com|bilibili\.com/i.test(e.target))) {
+        args.push('--http-header-fields=Referer:https://www.bilibili.com');
+      }
+      // 续播起点（完整索引 → mpv 列表位置）；若起点是 xm 条目则不在 mpv 列表，从 0 开始
+      const mpvStartPos = mpvToFull.indexOf(fullStart);
+      if (mpvStartPos > 0) args.push(`--playlist-start=${mpvStartPos}`);
+      if (progress && fullStart > 0) {
+        this.log('info', `合集「${collection.name}」从第 ${fullStart + 1} 项续播（共 ${entries.length} 项）`);
+      }
     }
     return {
       title: `${collection.name}（${entries.length} 项）`,
       args,
+      mpvToFull,
+      xmFiles,
+      fullCount: entries.length,
+      fullStart,
     };
   }
 
-  private buildMpvArgs(s: ChildTvSchedule, args: string[]): string[] {
+  private buildMpvArgs(s: ChildTvSchedule, args: string[], opts?: { noAudio?: boolean }): string[] {
     const common = [
       '--fullscreen',
       '--ontop', // 全屏 + 屏幕最上层（不锁键，孩子能看也能操作）
@@ -1099,6 +1351,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       '--quiet',
       '--keep-open=no',
       '--force-window=yes',
+      // 全屏自动播放无需屏幕菜单；OSC 在音频轨失败等异常态可能自动触发 quit（osc/__keybinding11），禁用可避免"秒退"
+      '--osc=no',
       // 抖音/B站等 CDN 对默认 UA 返回 403，必须使用浏览器 UA
       '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       // mpv 运行日志（诊断播放异常退出）
@@ -1107,6 +1361,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       `--input-ipc-server=${this.mpvIpcPath()}`,
     ];
     if (s.mediaType === 'audio') common.push('--no-video');
+    // 音频输出设备不可用时降级为静音输出：视频正常播放不跳变、纯音频静音不报错
+    if (opts?.noAudio) common.push('--ao=null');
     return [...common, ...args];
   }
 
@@ -1117,27 +1373,77 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       : '/tmp/lifeos-childtv.sock';
   }
 
-  async startPlayback(scheduleId: string, manual: boolean): Promise<ChildTvRuntimeStatus> {
-    const schedule = this.schedulesStore.findAll().find((s) => s.id === scheduleId);
-    if (!schedule) throw new NotFoundException('时段不存在');
+  async startPlayback(
+    source: { scheduleId?: string; collectionId?: string },
+    manual: boolean,
+    overrideStart?: number,
+  ): Promise<ChildTvRuntimeStatus> {
+    // 播放源解析：优先时段；否则直接按合集立即播放（构造临时时段，复用同一播放管线）
+    let schedule: ChildTvSchedule | null = null;
+    if (source.scheduleId) {
+      schedule = this.schedulesStore.findAll().find((s) => s.id === source.scheduleId) ?? null;
+      if (!schedule) throw new NotFoundException('时段不存在');
+    } else if (source.collectionId) {
+      const collection = this.collectionsStore.findAll().find((c) => c.id === source.collectionId);
+      if (!collection) throw new NotFoundException('合集不存在');
+      const now = new Date().toISOString();
+      schedule = {
+        id: `manual-col-${collection.id}`,
+        name: collection.name,
+        weekdays: [],
+        start: '00:00',
+        durationMinutes: this.readSettings().immediatePlayDurationMinutes,
+        collectionId: collection.id,
+        mediaType: 'video',
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+    } else {
+      throw new BadRequestException('请选择要播放的时段或合集');
+    }
     if (!schedule.enabled && !manual) throw new BadRequestException('该时段未启用');
 
-    if (this.player) {
+    if (this.player || this.externalPlay) {
       this.stopPlayback('切换播放内容');
     }
+
+    // 平台路由：非 local 合集走外部播放（浏览器打开页面 / 喜马拉雅客户端），无需 mpv
+    const routeCollection = schedule.collectionId
+      ? this.collectionsStore.findAll().find((c) => c.id === schedule.collectionId)
+      : null;
+    const platform = routeCollection?.platform ?? 'local';
+    if (platform !== 'local') {
+      if (!routeCollection) throw new BadRequestException('合集不存在');
+      return this.startExternalPlayback(routeCollection, schedule, manual);
+    }
+
     const mpv = this.detectMpv();
     if (!mpv) {
       this.log('error', `未检测到 mpv，无法播放「${schedule.name}」（请安装 mpv 或在设置中配置路径）`);
       throw new BadRequestException('未检测到 mpv 播放器，请安装后重试');
     }
 
-    let resolved: { title: string; args: string[] };
+    let resolved: {
+      title: string;
+      args: string[];
+      mpvToFull: number[];
+      xmFiles: Array<{ title: string; path: string; fullIndex: number }>;
+      fullCount: number;
+      fullStart: number;
+    };
     try {
-      resolved = await this.resolveResource(schedule);
+      resolved = await this.resolveResource(schedule, overrideStart);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.log('error', `播放「${schedule.name}」失败：${msg}`);
       throw new BadRequestException(msg);
+    }
+
+    // 喜马拉雅 xm 条目：当前续播起点是 xm 文件时，用喜马拉雅客户端打开（不经过 mpv）
+    const xmAt = resolved.xmFiles.find((x) => x.fullIndex === resolved.fullStart);
+    if (xmAt) {
+      return this.startXimalayaFilePlayback(schedule, xmAt, manual, resolved.fullCount, resolved.xmFiles);
     }
 
     const durationMs =
@@ -1147,25 +1453,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     const startedAt = new Date();
     const endsAt = new Date(startedAt.getTime() + durationMs);
 
-    const proc = spawn(mpv, this.buildMpvArgs(schedule, resolved.args), {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    proc.on('error', (err) => {
-      this.log('error', `mpv 启动失败：${err.message}`);
-      if (this.player?.proc === proc) this.player = null;
-    });
-    proc.on('exit', (code) => {
-      this.log('info', `mpv 退出（code=${code}）「${resolved.title}」`);
-      if (this.player?.proc === proc) {
-        this.player = null;
-        this.finishStats(resolved.title, schedule.id, manual, startedAt, new Date(), this.player?.stopReason ?? '播放结束');
-      }
-    });
-
     this.player = {
-      proc,
+      proc: null as unknown as ChildProcess,
       scheduleId: schedule.id,
       title: resolved.title,
       startedAt: startedAt.toISOString(),
@@ -1174,11 +1463,208 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       stopReason: null,
       collectionId: schedule.collectionId ?? null,
       ipcPath: this.mpvIpcPath(),
+      audioFallback: false,
+      mpvToFull: resolved.mpvToFull.length > 0 ? resolved.mpvToFull : null,
     };
+    // 启动 mpv；音频输出设备不可用时自动降级为静音模式重启一次（视频正常播放、纯音频静音不报错）
+    // mpv --log-file 为每次启动覆盖写，exit 时日志即本次播放完整记录，直接检查音频失败特征
+    const spawnMpv = (useNoAudio: boolean) => {
+      const proc = spawn(mpv, this.buildMpvArgs(schedule, resolved.args, { noAudio: useNoAudio }), {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      if (this.player) this.player.proc = proc;
+      proc.on('error', (err) => {
+        this.log('error', `mpv 启动失败：${err.message}`);
+        if (this.player?.proc === proc) this.player = null;
+      });
+      proc.on('exit', (code) => {
+        this.log('info', `mpv 退出（code=${code}）「${resolved.title}」`);
+        if (this.player?.proc !== proc) return;
+        // 音频初始化失败时 mpv 可能以任意退出码结束（含 code=0），以本次日志特征为准
+        if (!this.player.audioFallback && this.detectAudioDeviceFailure()) {
+          this.player.audioFallback = true;
+          this.log(
+            'warn',
+            `检测到音频输出设备不可用（0x80040154），已自动以静音模式（--ao=null）重新播放「${resolved.title}」；视频可正常播放，如需声音请修复系统音频`,
+          );
+          spawnMpv(true);
+          return;
+        }
+        const stopReason = this.player?.stopReason ?? '播放结束';
+        const { startedAt: st, collectionId } = this.player;
+        if (collectionId) void this.recordPlaybackProgress();
+        this.player = null;
+        this.finishStats(resolved.title, schedule.id, manual, st ? new Date(st) : startedAt, new Date(), stopReason);
+      });
+      return proc;
+    };
+    spawnMpv(false);
     // 播放中周期性记录进度（下一次 tick 起持续刷新，任何方式停止/崩溃都留有最近进度）
     void this.recordPlaybackProgress();
     this.log('info', `${manual ? '家长手动' : '定时'}播放开始「${resolved.title}」${schedule.mediaType === 'audio' ? '(音频)' : '(视频)'}`);
     return this.getRuntimeStatus();
+  }
+
+  /** 检测喜马拉雅客户端可执行文件（常见安装位置） */
+  private detectXimalayaApp(): string | null {
+    const candidates = [
+      path.join('D:', 'app', 'ximalaya', '喜马拉雅.exe'),
+      'C:\\Program Files\\Ximalaya\\喜马拉雅.exe',
+      'C:\\Program Files (x86)\\Ximalaya\\喜马拉雅.exe',
+      'C:\\Program Files\\Ximalaya\\Ximalaya.exe',
+      'C:\\Program Files (x86)\\Ximalaya\\Ximalaya.exe',
+      path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Ximalaya', '喜马拉雅.exe'),
+      path.join(process.env.LOCALAPPDATA ?? '', 'Ximalaya', '喜马拉雅.exe'),
+      path.join(process.env.PROGRAMFILES ?? '', 'Ximalaya', '喜马拉雅.exe'),
+    ];
+    for (const c of candidates) {
+      try {
+        if (fs.existsSync(c)) return c;
+      } catch { /* ignore */ }
+    }
+    return null;
+  }
+
+  /**
+   * 外部播放：web 用默认浏览器打开条目页面；ximalaya 启动喜马拉雅客户端并兜底浏览器打开页面。
+   * 外部播放不经过 mpv（无全屏置顶/进度记录），停止时仅结束系统播放会话，不强制关闭浏览器/客户端窗口。
+   */
+  private async startExternalPlayback(
+    collection: ChildTvCollection,
+    schedule: ChildTvSchedule,
+    manual: boolean,
+  ): Promise<ChildTvRuntimeStatus> {
+    // 此方法仅由平台路由在非 local 合集时调用，platform 必为 web 或 ximalaya
+    const platform = (collection.platform ?? 'web') as 'web' | 'ximalaya';
+    const pageItems = collection.items.filter((i) => i.type === 'url' && /^https?:\/\//i.test(i.value));
+    if (pageItems.length === 0) {
+      throw new BadRequestException(
+        `合集「${collection.name}」没有可打开的网页链接，请添加网页地址（如喜马拉雅音频页 / 抖音视频页）`,
+      );
+    }
+    const target = pageItems[0].value;
+    const now = new Date();
+    const durationMs =
+      (manual ? this.readSettings().immediatePlayDurationMinutes : schedule.durationMinutes) * 60_000;
+    const endsAt = new Date(now.getTime() + durationMs);
+
+    // 用默认浏览器打开页面（平台已登录时可直接播放）
+    try {
+      const opener = spawn('cmd', ['/c', 'start', '', target], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      opener.unref();
+    } catch (e) {
+      this.log('warn', `浏览器打开「${target}」失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    if (platform === 'ximalaya') {
+      const exe = this.detectXimalayaApp();
+      if (exe) {
+        try {
+          // 喜马拉雅客户端为单实例且不支持命令行定位具体音频，仅激活软件；页面已由浏览器打开可正常播放
+          const proc = spawn(exe, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+          proc.unref();
+          this.log('info', `已启动喜马拉雅客户端：${exe}`);
+        } catch (e) {
+          this.log('warn', `启动喜马拉雅客户端失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else {
+        this.log('warn', '未检测到喜马拉雅客户端，已使用浏览器打开喜马拉雅页面');
+      }
+    }
+
+    this.externalPlay = {
+      type: platform,
+      title: `${collection.name}（${pageItems.length} 个链接）`,
+      pageUrl: target,
+      startedAt: now.toISOString(),
+      endsAt: endsAt.toISOString(),
+      manual,
+      collectionId: collection.id,
+    };
+    this.log(
+      'info',
+      `${manual ? '家长手动' : '定时'}播放（外部）开始「${collection.name}」：${
+        platform === 'ximalaya' ? '打开喜马拉雅软件' : '浏览器打开页面'
+      } → ${target}，到时自动结束播放会话（不强制关闭浏览器/客户端窗口）`,
+    );
+    return this.getRuntimeStatus();
+  }
+
+  /**
+   * 播放本地 .xm 文件：用喜马拉雅客户端打开（关联命令已验证 喜马拉雅.exe "文件路径" 有效），
+   * 并记录"播到第几集"进度（合集完整条目索引），下次播放从该集继续。
+   */
+  private async startXimalayaFilePlayback(
+    schedule: ChildTvSchedule,
+    xmFile: { title: string; path: string; fullIndex: number },
+    manual: boolean,
+    fullCount: number,
+    xmFiles: Array<{ title: string; path: string; fullIndex: number }>,
+  ): Promise<ChildTvRuntimeStatus> {
+    if (!schedule.collectionId) throw new BadRequestException('合集不存在');
+    const exe = this.detectXimalayaApp();
+    if (!exe) {
+      this.log('error', `未检测到喜马拉雅客户端，无法播放 .xm 文件「${xmFile.title}」（请安装喜马拉雅客户端）`);
+      throw new BadRequestException('未检测到喜马拉雅客户端，无法播放 .xm 文件');
+    }
+    try {
+      const proc = spawn(exe, [xmFile.path], { detached: true, stdio: 'ignore', windowsHide: true });
+      proc.unref();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.log('error', `启动喜马拉雅客户端失败：${msg}`);
+      throw new BadRequestException(`启动喜马拉雅客户端失败：${msg}`);
+    }
+    // 记录进度：播到第几集（合集完整条目索引），下次播放从该集继续
+    this.saveProgress(schedule.collectionId, xmFile.fullIndex);
+    const now = new Date();
+    const durationMs =
+      (manual ? this.readSettings().immediatePlayDurationMinutes : schedule.durationMinutes) * 60_000;
+    this.externalPlay = {
+      type: 'ximalaya-local',
+      title: xmFile.title,
+      pageUrl: xmFile.path,
+      startedAt: now.toISOString(),
+      endsAt: new Date(now.getTime() + durationMs).toISOString(),
+      manual,
+      collectionId: schedule.collectionId,
+      entries: xmFiles,
+      entryIndex: xmFile.fullIndex,
+    };
+    this.log(
+      'info',
+      `${manual ? '家长手动' : '定时'}播放「${schedule.name}」第 ${xmFile.fullIndex + 1}/${fullCount} 集：喜马拉雅客户端打开 ${xmFile.path}`,
+    );
+    return this.getRuntimeStatus();
+  }
+
+  /** 记录合集播放进度（完整条目索引，mpv 与 xm 外部播放共用） */
+  private saveProgress(collectionId: string, entryIndex: number): void {
+    const now = new Date().toISOString();
+    const existing = this.progressStore.findAll().find((x) => x.collectionId === collectionId);
+    if (existing) {
+      this.progressStore.update(existing.id, { entryIndex, updatedAt: now });
+    } else {
+      this.progressStore.create({ id: crypto.randomUUID(), collectionId, entryIndex, updatedAt: now });
+    }
+  }
+
+  /** 检测 mpv 日志（每次启动覆盖写）是否包含音频输出设备初始化失败特征 */
+  private detectAudioDeviceFailure(): boolean {
+    try {
+      const logPath = path.join(this.dataDir, 'childtv-mpv.log');
+      if (!fs.existsSync(logPath)) return false;
+      const content = fs.readFileSync(logPath, 'utf-8');
+      return /Could not open\/initialize audio device|0x80040154|no sound/i.test(content);
+    } catch {
+      return false;
+    }
   }
 
   stopPlayback(reason: string): { success: boolean } {
@@ -1197,6 +1683,36 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       }
       this.log('info', `停止播放：${reason}`);
       this.player = null;
+    }
+    // 外部播放：web/ximalaya 仅结束会话（页面由用户自行关闭）；
+    // ximalaya-local（本地 .xm 文件用喜马拉雅客户端播放）：停止 = 关闭喜马拉雅客户端，确保真的停
+    if (this.externalPlay) {
+      const ext = this.externalPlay;
+      if (ext.type === 'ximalaya-local') {
+        const exe = this.detectXimalayaApp();
+        if (exe) {
+          try {
+            // 关闭喜马拉雅客户端进程（停止本地 .xm 播放；单实例，关掉即停止声音）
+            exec(`taskkill /IM "${path.basename(exe)}" /F /T`, () => undefined);
+          } catch {
+            /* ignore */
+          }
+          this.log('info', `停止播放「${ext.title}」：${reason}（已关闭喜马拉雅客户端）`);
+        } else {
+          this.log('info', `停止播放「${ext.title}」：${reason}`);
+        }
+      } else {
+        this.log('info', `停止播放「${ext.title}」：${reason}（不强制关闭浏览器/客户端窗口）`);
+      }
+      this.finishStats(
+        ext.title,
+        null,
+        ext.manual,
+        new Date(ext.startedAt),
+        new Date(),
+        reason,
+      );
+      this.externalPlay = null;
     }
     return { success: true };
   }
@@ -1258,18 +1774,59 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     if (!p || !p.collectionId || !p.ipcPath) return;
     const pos = await this.queryMpvProperty(p.ipcPath, 'playlist-pos');
     if (typeof pos !== 'number' || pos < 0) return;
-    const now = new Date().toISOString();
-    const existing = this.progressStore.findAll().find((x) => x.collectionId === p.collectionId);
-    if (existing) {
-      this.progressStore.update(existing.id, { entryIndex: pos, updatedAt: now });
-    } else {
-      this.progressStore.create({ id: crypto.randomUUID(), collectionId: p.collectionId, entryIndex: pos, updatedAt: now });
+    // 混合合集（mpv + xm）：playlist-pos 是 mpv 列表位置，映射回合集完整条目索引
+    const fullIndex = p.mpvToFull && p.mpvToFull[pos] !== undefined ? p.mpvToFull[pos] : pos;
+    this.saveProgress(p.collectionId, fullIndex);
+  }
+
+  /** 同步喜马拉雅本地播放进度：客户端窗口标题 = 当前播放文件，映射回合集条目索引（尽力而为） */
+  private async syncXimalayaProgress(): Promise<void> {
+    const ext = this.externalPlay;
+    if (!ext || ext.type !== 'ximalaya-local' || !ext.entries?.length || !ext.collectionId) return;
+    const exe = this.detectXimalayaApp();
+    if (!exe) return;
+    const title = await this.readXimalayaWindowTitle(exe);
+    if (!title) return;
+    const norm = (s: string) => s.replace(/\.xm$/i, '').trim();
+    const want = norm(title);
+    let idx = -1;
+    for (let i = 0; i < ext.entries.length; i++) {
+      const t = norm(ext.entries[i].title);
+      if (t === want || (t.length > 1 && (t.includes(want) || want.includes(t)))) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0 && idx !== ext.entryIndex) {
+      ext.entryIndex = idx;
+      this.saveProgress(ext.collectionId, idx);
+      this.log('info', `喜马拉雅客户端播放进度同步：第 ${idx + 1} 集「${ext.entries[idx].title}」`);
     }
   }
 
+  /** 读取喜马拉雅客户端窗口标题（Windows：PowerShell 查询进程主窗口标题） */
+  private readXimalayaWindowTitle(exePath: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const name = path.basename(exePath, '.exe');
+      exec(
+        `powershell -NoProfile -NonInteractive -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1 -ExpandProperty MainWindowTitle"`,
+        { encoding: 'utf8', windowsHide: true, timeout: 8000 },
+        (err, stdout) => {
+          if (err || !stdout) return resolve(null);
+          const t = stdout.trim();
+          resolve(t || null);
+        },
+      );
+    });
+  }
+
   /** 手动立即播放指定时段（本机 mpv 播放） */
-  async playNow(scheduleId: string): Promise<ChildTvRuntimeStatus> {
-    return this.startPlayback(scheduleId, true);
+  async playNow(dto: { scheduleId?: string; collectionId?: string; entryIndex?: number }): Promise<ChildTvRuntimeStatus> {
+    return this.startPlayback(
+      { scheduleId: dto?.scheduleId, collectionId: dto?.collectionId },
+      true,
+      dto?.entryIndex,
+    );
   }
 
   // ==================== 状态 ====================
@@ -1277,20 +1834,21 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
   getRuntimeStatus(): ChildTvRuntimeStatus {
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    const playing = !!this.player;
+    const activeSession = this.player ?? this.externalPlay;
+    const playing = !!activeSession;
     const remainingMinutes = playing
-      ? Math.max(0, Math.ceil((Date.parse(this.player?.endsAt ?? now.toISOString()) - Date.now()) / 60_000))
+      ? Math.max(0, Math.ceil((Date.parse(activeSession?.endsAt ?? now.toISOString()) - Date.now()) / 60_000))
       : null;
     const next = this.nextSchedule(nowMin);
     const mpv = this.detectMpv();
     return {
       playing,
-      currentTitle: this.player?.title ?? '',
+      currentTitle: this.player?.title ?? this.externalPlay?.title ?? '',
       currentScheduleId: this.player?.scheduleId ?? null,
-      startedAt: this.player?.startedAt ?? null,
-      endsAt: this.player?.endsAt ?? null,
+      startedAt: activeSession?.startedAt ?? null,
+      endsAt: activeSession?.endsAt ?? null,
       remainingMinutes,
-      manual: this.player?.manual ?? false,
+      manual: activeSession?.manual ?? false,
       nextSchedule: next
         ? {
             name: next.s.name,
@@ -1298,10 +1856,14 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
             startsInMinutes: next.startsInMinutes,
           }
         : null,
-      mpv: playing ? 'running' : mpv ? 'stopped' : 'missing',
+      mpv: this.player ? 'running' : mpv ? 'stopped' : 'missing',
       mpvAvailable: !!mpv,
       pinEnabled: this.pinEnabledForDefault(),
+      audioFallback: this.player?.audioFallback ?? false,
       lastLog: this.lastLog,
+      currentCollectionId: this.externalPlay?.collectionId ?? null,
+      currentIndex: this.externalPlay?.entryIndex ?? null,
+      totalCount: this.externalPlay?.entries?.length ?? null,
     };
   }
 
@@ -1341,13 +1903,17 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
         .findAll()
         .filter((s) => s.enabled && this.inWindow(s, nowMin));
 
-      if (active.length > 0 && !this.player) {
-        await this.startPlayback(active[0].id, false);
-      } else if (active.length === 0 && this.player && !this.player.manual) {
-        this.stopPlayback('时段窗口结束');
+      const sessionActive = !!this.player || !!this.externalPlay;
+      if (active.length > 0 && !sessionActive) {
+        await this.startPlayback({ scheduleId: active[0].id }, false);
+      } else if (active.length === 0 && sessionActive) {
+        const manual = this.player?.manual ?? this.externalPlay?.manual ?? false;
+        if (!manual) this.stopPlayback('时段窗口结束');
       }
-      // 手动播放超时自动停止
-      if (this.player?.manual && Date.now() > Date.parse(this.player.endsAt)) {
+      // 手动播放超时自动停止（含外部播放）
+      const activeEnds = this.player?.endsAt ?? this.externalPlay?.endsAt ?? null;
+      const activeManual = this.player?.manual ?? this.externalPlay?.manual ?? false;
+      if (activeManual && activeEnds && Date.now() > Date.parse(activeEnds)) {
         this.stopPlayback('手动播放时长已到');
       }
       // 兜底：播放进程意外退出但 session 未清（mpv crash）
@@ -1356,6 +1922,8 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
       }
       // 播放中周期性记录合集播放进度（15s 一次，不阻塞调度）
       if (this.player) void this.recordPlaybackProgress();
+      // 喜马拉雅客户端本地播放：窗口标题 = 当前播放文件，同步"播到第几集"进度
+      if (this.externalPlay?.type === 'ximalaya-local') void this.syncXimalayaProgress();
     } catch (e) {
       this.log('error', `调度异常：${e instanceof Error ? e.message : String(e)}`);
     }
@@ -1453,6 +2021,48 @@ export class ChildTvService implements OnModuleInit, OnModuleDestroy {
     } catch (e) {
       throw new BadRequestException(`无法浏览目录：${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  /** 扫描文件夹：递归收集全部音视频文件（含 .xm 喜马拉雅音频），按文件名自然排序，供前端导入预览 */
+  scanFolder(targetPath: string): ChildTvScanResult {
+    const p = path.resolve(targetPath);
+    if (!fs.existsSync(p) || !fs.statSync(p).isDirectory()) {
+      throw new BadRequestException('文件夹不存在');
+    }
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      let ents: fs.Dirent[] = [];
+      try {
+        ents = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of ents) {
+        if (e.name.startsWith('.')) continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (MEDIA_EXTS.has(path.extname(e.name).toLowerCase())) files.push(full);
+      }
+    };
+    walk(p);
+    files.sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }));
+    return {
+      path: p,
+      files: files.map((f) => {
+        const ext = path.extname(f).toLowerCase();
+        let size = 0;
+        try {
+          size = fs.statSync(f).size;
+        } catch { /* ignore */ }
+        return {
+          name: path.basename(f),
+          path: f,
+          kind: VIDEO_EXTS.has(ext) ? 'video' : 'audio',
+          isXimalaya: XIMALAYA_EXTS.has(ext),
+          size,
+        };
+      }),
+    };
   }
 }
 

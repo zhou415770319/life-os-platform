@@ -1952,14 +1952,42 @@ export class PluginMethodRegistry {
     this.register({
       id: 'child-tv.playNow',
       name: '立即播放',
-      description: '家长远程立即播放指定时段内容（本地文件夹合集/单文件/URL），可传时段名称',
+      description: '家长远程立即播放：可指定时段（scheduleId/name）或合集（collectionId/collectionName）',
       pluginKey,
       params: [
         { name: 'scheduleId', type: 'string', required: false, description: '时段 ID，与名称二选一' },
         { name: 'name', type: 'string', required: false, description: '时段名称，与 ID 二选一（支持模糊匹配，如"纪录片"）' },
+        { name: 'collectionId', type: 'string', required: false, description: '合集 ID，直接按合集播放（与时段参数二选一）' },
+        { name: 'collectionName', type: 'string', required: false, description: '合集名称，与 collectionId 二选一（支持模糊匹配）' },
       ],
     }, async (args) => {
-      const status = await this.childTvService.playNow(resolveScheduleId(args));
+      // 优先时段（ID/名称）；未命中时段时回退按合集（ID/名称）播放
+      let source: { scheduleId?: string; collectionId?: string };
+      let scheduleId = '';
+      try {
+        scheduleId = resolveScheduleId(args);
+      } catch {
+        scheduleId = '';
+      }
+      if (scheduleId) {
+        source = { scheduleId };
+      } else {
+        const cid = typeof args.collectionId === 'string' ? args.collectionId : '';
+        const cname = typeof args.collectionName === 'string' ? args.collectionName : '';
+        let collectionId = cid;
+        if (!collectionId && cname) {
+          const found = this.childTvService
+            .getCollections()
+            .find((c) => c.name.includes(cname) || cname.includes(c.name));
+          if (!found) throw new Error(`未找到名称为「${cname}」的合集`);
+          collectionId = found.id;
+        }
+        if (!collectionId) {
+          throw new Error('请提供时段（scheduleId/name）或合集（collectionId/collectionName）');
+        }
+        source = { collectionId };
+      }
+      const status = await this.childTvService.playNow(source);
       return {
         success: true,
         playing: status.playing,

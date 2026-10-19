@@ -19,6 +19,7 @@ import type {
   ChildTvLogEntry,
   ChildTvResolveUrlResult,
   ChildTvRuntimeStatus,
+  ChildTvScanResult,
   ChildTvSchedule,
   ChildTvScheduleInput,
   ChildTvSettings,
@@ -107,12 +108,39 @@ export class ChildTvController {
     return this.childTvService.deleteCollection(id, force === 'true');
   }
 
-  /** 解析 URL：直链 or 合集页提取视频地址 */
+  /** 解析 URL：直链 or 合集页提取视频地址；cookie 为平台解析所需登录态（可选，成功后自动保存复用） */
   @Post('resolve-url')
   async resolveUrl(
-    @Body() dto: { url: string },
+    @Body() dto: { url: string; cookie?: string },
   ): Promise<ChildTvResolveUrlResult> {
-    return this.childTvService.resolveCollectionUrl(dto?.url ?? '');
+    return this.childTvService.resolveCollectionUrl(dto?.url ?? '', dto?.cookie);
+  }
+
+  // ===== 喜马拉雅 · 浏览器辅助解析 =====
+
+  /** 生成浏览器辅助解析脚本（用户在已登录的喜马拉雅页面 Console 运行；baseUrl 为 life-os 前端地址） */
+  @Get('ximalaya/script')
+  getXimalayaScript(
+    @Query('token') token: string,
+    @Query('baseUrl') baseUrl: string,
+  ): { script: string } {
+    return this.childTvService.getXimalayaScript(token ?? '', baseUrl ?? '');
+  }
+
+  /** 脚本回传直链（no-cors form 提交，防滥用：一次性 token + 地址白名单校验） */
+  @Post('ximalaya/collect')
+  collectXimalaya(
+    @Body() body: { token?: string; payload?: string },
+  ): { ok: boolean; message: string } {
+    return this.childTvService.collectXimalayaResults(body?.token ?? '', body?.payload ?? '');
+  }
+
+  /** 查询浏览器辅助解析结果（前端"我已运行脚本"后拉取，按原顺序返回） */
+  @Get('ximalaya/pending')
+  getXimalayaPending(
+    @Query('token') token: string,
+  ): { items: { title?: string; url: string }[]; failed: { id: string; title: string; err?: string }[] } {
+    return this.childTvService.getXimalayaPendingResult(token ?? '');
   }
 
   // ===== 时段 =====
@@ -147,8 +175,8 @@ export class ChildTvController {
   // ===== 控制（家长） =====
 
   @Post('play')
-  playNow(@Body() dto: { scheduleId: string }): Promise<ChildTvRuntimeStatus> {
-    return this.childTvService.playNow(dto?.scheduleId ?? '');
+  playNow(@Body() dto: { scheduleId?: string; collectionId?: string; entryIndex?: number }): Promise<ChildTvRuntimeStatus> {
+    return this.childTvService.playNow(dto ?? {});
   }
 
   @Post('stop')
@@ -186,6 +214,12 @@ export class ChildTvController {
   @Get('browse')
   browse(@Query('path') path?: string): ChildTvBrowseResult {
     return this.childTvService.browse(path);
+  }
+
+  /** 扫描文件夹：递归返回全部音视频文件（含 .xm），按文件名排序，供合集导入预览 */
+  @Post('scan-folder')
+  scanFolder(@Body('path') path: string): ChildTvScanResult {
+    return this.childTvService.scanFolder(path);
   }
 
   @Get('logs')

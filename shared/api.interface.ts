@@ -823,6 +823,13 @@ export interface ChildTvCollectionItem {
 export interface ChildTvCollection {
   id: string;
   name: string;
+  /**
+   * 合集平台类型：
+   * - local：本地文件/直链，用 mpv 播放（全屏置顶、进度、定时）
+   * - web：网页链接，用默认浏览器打开页面播放
+   * - ximalaya：喜马拉雅音频，打开喜马拉雅客户端软件播放（并兜底浏览器打开页面）
+   */
+  platform?: 'local' | 'web' | 'ximalaya';
   items: ChildTvCollectionItem[];
   createdAt: string;
   updatedAt: string;
@@ -830,6 +837,7 @@ export interface ChildTvCollection {
 
 export interface ChildTvCollectionInput {
   name: string;
+  platform?: 'local' | 'web' | 'ximalaya';
   items?: ChildTvCollectionItem[];
 }
 
@@ -839,6 +847,25 @@ export interface ChildTvResolvedItem {
   title?: string;
   /** 可播放地址（直链或解析后的播放 URL） */
   url: string;
+}
+
+/** 解析需要用户补充的条件（如平台接口需要登录 Cookie，或需浏览器辅助取直链） */
+export interface ChildTvResolveRequirement {
+  /** 平台标识 */
+  platform: string;
+  /** 需要什么条件：cookie=登录 Cookie；browser=浏览器辅助（运行脚本取直链回传） */
+  kind: 'cookie' | 'browser';
+  /** 给用户看的提示文案（如何获取该条件） */
+  hint: string;
+  /** 附加数据（browser 模式） */
+  payload?: {
+    /** 一次性令牌，脚本回传直链时校验 */
+    token: string;
+    /** 待解析条目（id + 标题） */
+    trackIds: { id: string; title: string }[];
+    /** 后端 API 前缀（脚本回传地址拼接用） */
+    baseUrl?: string;
+  };
 }
 
 /** 解析 URL 的结果（直链 or 合集展开） */
@@ -852,6 +879,8 @@ export interface ChildTvResolveUrlResult {
   platform?: string;
   /** 解析失败时的错误提示 */
   error?: string;
+  /** 解析需要用户补充条件（如 Cookie）时返回；调用方收集后带条件重新解析 */
+  requires?: ChildTvResolveRequirement;
 }
 
 export interface ChildTvSchedule {
@@ -910,7 +939,15 @@ export interface ChildTvRuntimeStatus {
   mpvAvailable: boolean;
   /** 观看页 PIN 是否已启用 */
   pinEnabled: boolean;
+  /** 是否已降级为静音播放（音频输出设备不可用时自动降级，视频正常播放/纯音频静音） */
+  audioFallback: boolean;
   lastLog: string;
+  /** 当前播放合集的 ID（外部播放） */
+  currentCollectionId: string | null;
+  /** 当前播放到的条目索引（0-based，外部播放） */
+  currentIndex: number | null;
+  /** 合集总条目数（外部播放） */
+  totalCount: number | null;
 }
 
 export interface ChildTvBrowseEntry {
@@ -926,6 +963,23 @@ export interface ChildTvBrowseResult {
   drives: string[];
   dirs: string[];
   files: ChildTvBrowseEntry[];
+}
+
+/** 文件夹扫描结果中的媒体文件（递归收集，按文件名自然排序） */
+export interface ChildTvScanFile {
+  name: string;
+  path: string;
+  kind: 'video' | 'audio';
+  /** 喜马拉雅 .xm 文件：播放时用喜马拉雅客户端打开 */
+  isXimalaya: boolean;
+  /** 文件字节大小 */
+  size: number;
+}
+
+/** 文件夹扫描结果 */
+export interface ChildTvScanResult {
+  path: string;
+  files: ChildTvScanFile[];
 }
 
 export interface ChildTvLogEntry {
@@ -960,6 +1014,8 @@ export interface ChildTvSettings {
   immediatePlayDurationMinutes: number;
   /** 自定义 mpv 可执行文件路径（留空自动检测） */
   mpvPath: string;
+  /** 喜马拉雅解析用登录 Cookie（解析成功后自动保存，下次解析自动带上；空=未配置） */
+  ximalayaCookie?: string;
 }
 
 // ===== 用户系统（Auth） =====

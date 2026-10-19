@@ -22,5 +22,6 @@ export type {
   ResolvedItem,
   UrlPlatform,
   UrlProvider,
+  UrlResolveOptions,
   UrlResolveResult,
 } from './types';
