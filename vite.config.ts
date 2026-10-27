@@ -43,12 +43,19 @@ const baseConfig = presetDefineConfig(
 // 只移除这一个插件，preset 的其余行为（路由/代理/构建产物）保持原样。
 export default {
   ...baseConfig,
-  plugins: (baseConfig.plugins ?? []).filter(
-    (p) =>
-      !(
-        p &&
-        typeof p === 'object' &&
-        (p as { name?: string }).name === 'miaoda-slardar'
-      ),
-  ),
+  plugins: (() => {
+    // preset 的 plugins 可能是嵌套数组，先展平保持顺序，再过滤
+    const flatten = (list: any[]): any[] =>
+      list.flatMap((p) => (Array.isArray(p) ? flatten(p) : [p]));
+    return flatten(baseConfig.plugins ?? []).filter((p) => {
+      const name = p && typeof p === 'object' ? (p as { name?: string }).name : undefined;
+      return !(
+        name === 'miaoda-slardar' ||
+        // 移除 @tailwindcss/vite 插件（scan/generate），让 Tailwind 统一走 postcss 管道
+        // （postcss.config.js 中的 @tailwindcss/postcss + @layer/oklch 兼容转译插件），
+        // 避免其绕过 postcss 导致旧浏览器（Chrome/Edge < 99/<111）样式失效。
+        (name ?? '').startsWith('@tailwindcss/vite')
+      );
+    });
+  })(),
 };

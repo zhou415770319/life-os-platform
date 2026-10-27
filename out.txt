@@ -1,0 +1,6 @@
+play: playing=true title=02围魏救赵.xm
+t=5s winTitle=[] playing=true entry=02围魏救赵.xm lastLog=喜马拉雅合集共 30 集，已启用自动切集（每 15 分钟切换下一集）
+t=10s winTitle=[] playing=true entry=02围魏救赵.xm lastLog=喜马拉雅合集共 30 集，已启用自动切集（每 15 分钟切换下一集）
+t=15s winTitle=[] playing=true entry=02围魏救赵.xm lastLog=喜马拉雅合集共 30 集，已启用自动切集（每 15 分钟切换下一集）
+t=20s winTitle=[] playing=true entry=02围魏救赵.xm lastLog=喜马拉雅合集共 30 集，已启用自动切集（每 15 分钟切换下一集）
+stopped

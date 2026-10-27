@@ -817,6 +817,8 @@ export interface ChildTvCollectionItem {
   title?: string;
   /** URL 为合集地址时解析出的多个视频地址（仅展示用，播放时重新解析） */
   expandedUrls?: string[];
+  /** 探测到的媒体时长（秒，仅本地文件条目；未知不填） */
+  duration?: number;
 }
 
 /** 播放合集：有序条目列表（folder 内文件按文件名排序，条目间支持手动调序） */
@@ -839,6 +841,42 @@ export interface ChildTvCollectionInput {
   name: string;
   platform?: 'local' | 'web' | 'ximalaya';
   items?: ChildTvCollectionItem[];
+}
+
+/** 批量创建合集：选择一个父文件夹，其下每个一级子文件夹自动生成一个合集 */
+export interface ChildTvBatchCreateInput {
+  folder: string;
+}
+
+/** 批量创建前的预览（先扫描对比，确认后再真正创建） */
+export interface ChildTvBatchPreviewInput {
+  folder: string;
+}
+
+export interface ChildTvBatchPreviewResult {
+  /** 将新建的合集（子文件夹含音视频且不重名） */
+  toCreate: Array<{ name: string; count: number }>;
+  /** 跳过的项（已存在同名 / 无音视频文件），含原因 */
+  skipped: Array<{ name: string; reason: string }>;
+}
+
+export interface ChildTvBatchCreateResult {
+  created: ChildTvCollection[];
+  /** 未创建的项（重名 / 无音视频文件），含原因 */
+  skipped: Array<{ name: string; reason: string }>;
+}
+
+/** 批量删除合集 */
+export interface ChildTvBatchDeleteInput {
+  ids: string[];
+}
+
+export interface ChildTvBatchDeleteResult {
+  deleted: number;
+  /** 被解绑的时段名称（合集被时段引用时自动解绑） */
+  detachedSchedules: string[];
+  /** 删除失败的项 */
+  failed: Array<{ id: string; reason: string }>;
 }
 
 /** 解析出的可播放条目（标题 + 地址，合集展开时每项一条） */
@@ -948,6 +986,26 @@ export interface ChildTvRuntimeStatus {
   currentIndex: number | null;
   /** 合集总条目数（外部播放） */
   totalCount: number | null;
+  /** 当前播放的条目名称（合集内正在播的这一集/这一段） */
+  currentEntryTitle: string | null;
+  /** 当前条目内已播放位置（秒，仅 mpv 本地播放可获取） */
+  currentPosition: number | null;
+  /** 当前条目总时长（秒，本地文件可探测；未知为 null） */
+  currentDuration: number | null;
+  /** 合集全部条目的总时长（秒，已探测条目之和；含未知条目时为 null 或部分值，前端据实展示） */
+  collectionTotalDuration: number | null;
+  /** 已播放累计时长（秒 = 之前条目的已探测时长之和 + 当前条目位置） */
+  collectionPlayedSeconds: number | null;
+}
+
+/** 合集播放进度（供前端展示"上次播到第几集/位置"） */
+export interface ChildTvCollectionProgressInfo {
+  collectionId: string;
+  /** 上次播放到的条目索引（0-based） */
+  entryIndex: number;
+  /** 条目内位置（秒，仅 mpv 本地播放记录） */
+  position?: number | null;
+  updatedAt: string;
 }
 
 export interface ChildTvBrowseEntry {
@@ -1016,6 +1074,8 @@ export interface ChildTvSettings {
   mpvPath: string;
   /** 喜马拉雅解析用登录 Cookie（解析成功后自动保存，下次解析自动带上；空=未配置） */
   ximalayaCookie?: string;
+  /** 喜马拉雅 .xm 本地文件连播：每集自动切换间隔（分钟），默认 15，范围 1-60 */
+  ximalayaTrackDurationMinutes?: number;
 }
 
 // ===== 用户系统（Auth） =====
@@ -1040,3 +1100,62 @@ export interface AuthBootstrapResult {
   initialized: boolean;
 }
 
+
+// ===== 喜马拉雅合集播放（xm-player：Excel 数据源 + 影刀 RPA 文件触发器） =====
+
+export interface XmPlayerCollection {
+  /** 合集ID（Excel「合集」表第一列） */
+  id: string;
+  /** 专辑名称 */
+  name: string;
+  /** 专辑链接（喜马拉雅专辑页/音频页） */
+  url?: string;
+  /** 总集数（Excel 可填，用于展示 x/y） */
+  totalEpisodes?: number;
+  /** 状态：待播放 / 播放中 / 已暂停 / 已完成（Excel 修改后保存即触发影刀文件触发器） */
+  status?: string;
+  note?: string;
+  /** 以下由「进度」表合并而来（影刀回写） */
+  currentIndex?: number | null;
+  currentTitle?: string | null;
+  progressUpdatedAt?: string | null;
+}
+
+export interface XmPlayerSchedule {
+  id: string;
+  enabled: boolean;
+  /** 星期文本数组：'周一'~'周日' */
+  weekdays: string[];
+  start: string;
+  end: string;
+  collectionId: string;
+  collectionName?: string;
+}
+
+export interface XmPlayerRefreshResult {
+  excelPath: string;
+  lastModified?: string;
+  collections: XmPlayerCollection[];
+  schedules: XmPlayerSchedule[];
+  added: number;
+  removed: number;
+  updated: number;
+  message?: string;
+}
+
+export interface XmPlayerConfig {
+  excelPath?: string;
+}
+
+export interface XmPlayerStatusUpdate {
+  collectionId: string;
+  status: string;
+}
+
+export interface XmPlayerBrowseResult {
+  path: string | null;
+  parent: string | null;
+  drives: string[];
+  dirs: string[];
+  files: { name: string; path: string }[];
+}

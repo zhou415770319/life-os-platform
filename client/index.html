@@ -4,6 +4,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- 国产双核浏览器（360/QQ/搜狗等）强制使用 Webkit 极速内核，避免兼容模式导致样式失效 -->
+  <meta name="renderer" content="webkit">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <link rel="icon" href="/favicon.svg">
   <title>妙搭</title>
   <script>
@@ -16,6 +19,22 @@
 </head>
 
 <body>
+  <script>
+    // 旧浏览器兼容提示：Tailwind 4 依赖 @layer，Chrome/Edge < 99、Safari < 16.4 不支持会导致样式错乱
+    try {
+      if (!window.CSS || !CSS.supports || !CSS.supports('at-rule(@layer)')) {
+        var d = document.createElement('div');
+        d.style.cssText =
+          'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#f59e0b;color:#1f2937;' +
+          'padding:10px 16px;font:13px/1.6 "Microsoft YaHei",sans-serif;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.2);';
+        d.textContent =
+          '当前浏览器版本过旧，页面样式可能错乱。请升级到最新版 Chrome / Edge（111 及以上）；使用 360 / QQ / 搜狗浏览器请切换到「极速/高速」内核模式。';
+        document.body.appendChild(d);
+      }
+    } catch (e) {
+      /* 忽略检测异常 */
+    }
+  </script>
   <div id="root"></div>
   <script type="module" src="/src/index.tsx"></script>
 </body>

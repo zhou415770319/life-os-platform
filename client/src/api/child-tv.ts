@@ -1,9 +1,13 @@
 import { axiosForBackend } from '@lark-apaas/client-toolkit/utils/getAxiosForBackend';
 import type {
   ChildTvAuthInfo,
+  ChildTvBatchCreateResult,
+  ChildTvBatchDeleteResult,
+  ChildTvBatchPreviewResult,
   ChildTvBrowseResult,
   ChildTvCollection,
   ChildTvCollectionInput,
+  ChildTvCollectionProgressInfo,
   ChildTvLogEntry,
   ChildTvResolveUrlResult,
   ChildTvRuntimeStatus,
@@ -127,6 +131,39 @@ export async function childTvDeleteCollection(
   });
 }
 
+/** 批量创建合集：选择父文件夹，其下每个一级子文件夹自动生成一个合集 */
+export async function childTvBatchCreateCollections(
+  folder: string,
+): Promise<ChildTvBatchCreateResult> {
+  return request<ChildTvBatchCreateResult>({
+    url: '/api/child-tv/collections/batch-create',
+    method: 'POST',
+    data: { folder },
+  });
+}
+
+/** 批量创建前的预览：先扫描对比（将新建/已存在/无媒体），不创建 */
+export async function childTvBatchPreviewCollections(
+  folder: string,
+): Promise<ChildTvBatchPreviewResult> {
+  return request<ChildTvBatchPreviewResult>({
+    url: '/api/child-tv/collections/batch-preview',
+    method: 'POST',
+    data: { folder },
+  });
+}
+
+/** 批量删除合集：被时段引用时自动解绑 */
+export async function childTvBatchDeleteCollections(
+  ids: string[],
+): Promise<ChildTvBatchDeleteResult> {
+  return request<ChildTvBatchDeleteResult>({
+    url: '/api/child-tv/collections/batch-delete',
+    method: 'POST',
+    data: { ids },
+  });
+}
+
 /** 解析 URL：直链 or 合集页提取视频地址；cookie 为平台解析所需登录态（可选） */
 export async function childTvResolveUrl(url: string, cookie?: string): Promise<ChildTvResolveUrlResult> {
   return request<ChildTvResolveUrlResult>({
@@ -219,6 +256,11 @@ export async function childTvStop(): Promise<{ success: boolean }> {
 
 export async function childTvStatus(): Promise<ChildTvRuntimeStatus> {
   return request<ChildTvRuntimeStatus>({ url: '/api/child-tv/status', method: 'GET' });
+}
+
+/** 合集播放进度列表（展示"上次播到第几集/位置"） */
+export async function childTvProgress(): Promise<ChildTvCollectionProgressInfo[]> {
+  return request<ChildTvCollectionProgressInfo[]>({ url: '/api/child-tv/progress', method: 'GET' });
 }
 
 /** 观看页免登录状态 */

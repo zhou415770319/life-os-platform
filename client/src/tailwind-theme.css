@@ -10,7 +10,23 @@
   --secondary: hsl(240 4% 16%);
   --secondary-foreground: hsl(0 0% 98%);
   --muted: hsl(240 4% 16%);
-  --muted-foreground: hsl(240 5% 65%);
+  --muted-foreground: hsl(240 6% 74%);
+
+  /* ── 灰度语义色阶（覆盖 Tailwind 默认 zinc 色板）──────────────
+   * 默认 zinc 在深色背景下偏暗（400=61% / 500=50% / 600=38%），
+   * 这里整体提亮并全部收敛为主题变量：改动只在这里调整，全局文字/边框/背景
+   * 的 text-zinc-* / bg-zinc-* / border-zinc-* 都会跟随。 */
+  --zinc-50: hsl(240 6% 97%);
+  --zinc-100: hsl(240 6% 94%);
+  --zinc-200: hsl(240 6% 88%);
+  --zinc-300: hsl(240 6% 78%);
+  --zinc-400: hsl(240 6% 70%);
+  --zinc-500: hsl(240 6% 60%);
+  --zinc-600: hsl(240 6% 50%);
+  --zinc-700: hsl(240 6% 40%);
+  --zinc-800: hsl(240 6% 28%);
+  --zinc-900: hsl(240 6% 18%);
+  --zinc-950: hsl(240 6% 10%);
   --accent: hsl(240 4% 16%);
   --accent-foreground: hsl(0 0% 98%);
   --info: hsl(217 91% 60%);
@@ -90,6 +106,19 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+
+  /* zinc 色板跟随主题变量（覆盖 Tailwind 默认值） */
+  --color-zinc-50: var(--zinc-50);
+  --color-zinc-100: var(--zinc-100);
+  --color-zinc-200: var(--zinc-200);
+  --color-zinc-300: var(--zinc-300);
+  --color-zinc-400: var(--zinc-400);
+  --color-zinc-500: var(--zinc-500);
+  --color-zinc-600: var(--zinc-600);
+  --color-zinc-700: var(--zinc-700);
+  --color-zinc-800: var(--zinc-800);
+  --color-zinc-900: var(--zinc-900);
+  --color-zinc-950: var(--zinc-950);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-info: var(--info);

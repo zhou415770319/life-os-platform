@@ -26,6 +26,8 @@ import { InsightsModule } from './modules/insights/insights.module';
 import { ReviewModule } from './modules/review/review.module';
 import { ReviewBoardModule } from './modules/review-board/review-board.module';
 import { ChildTvModule } from './modules/child-tv/child-tv.module';
+import { ProjectManagerModule } from './modules/project-manager/project-manager.module';
+import { XmPlayerModule } from './modules/xm-player/xm-player.module';
 
 @Module({
   imports: [
@@ -55,6 +57,8 @@ import { ChildTvModule } from './modules/child-tv/child-tv.module';
     ReviewModule,
     ReviewBoardModule,
     ChildTvModule,
+    ProjectManagerModule,
+    XmPlayerModule,
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last

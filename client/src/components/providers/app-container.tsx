@@ -50,9 +50,10 @@ export function AppContainer({ children }: { children: ReactNode }) {
     colorInfo: cssColors.primary,
     colorLink: cssColors.primary,
     colorPrimary: cssColors.primary,
-    colorSuccess: cssColors.primary,
+    colorSuccess: cssColors.success,
     colorTextBase: cssColors.foreground,
-    colorWarning: cssColors.destructive,
+    colorTextSecondary: cssColors.mutedForeground,
+    colorWarning: cssColors.warning,
   };
   const antdTableToken = {
     bodySortBg: cssColors.muted,

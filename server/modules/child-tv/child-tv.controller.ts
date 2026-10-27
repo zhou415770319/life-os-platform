@@ -13,9 +13,13 @@ import type { Request } from 'express';
 import { ChildTvService } from './child-tv.service';
 import type {
   ChildTvAuthInfo,
+  ChildTvBatchCreateResult,
+  ChildTvBatchDeleteResult,
+  ChildTvBatchPreviewResult,
   ChildTvBrowseResult,
   ChildTvCollection,
   ChildTvCollectionInput,
+  ChildTvCollectionProgressInfo,
   ChildTvLogEntry,
   ChildTvResolveUrlResult,
   ChildTvRuntimeStatus,
@@ -108,6 +112,24 @@ export class ChildTvController {
     return this.childTvService.deleteCollection(id, force === 'true');
   }
 
+  /** 批量创建合集：选择父文件夹，其下每个一级子文件夹自动生成一个合集（子文件夹内音视频为资源） */
+  @Post('collections/batch-create')
+  batchCreateCollections(@Body() dto: { folder?: string }): ChildTvBatchCreateResult {
+    return this.childTvService.batchCreateCollectionsFromFolder(dto?.folder ?? '');
+  }
+
+  /** 批量创建前的预览：先扫描对比，返回将新建与跳过（已存在/无媒体）的明细，不写库 */
+  @Post('collections/batch-preview')
+  batchPreviewCollections(@Body() dto: { folder?: string }): ChildTvBatchPreviewResult {
+    return this.childTvService.previewBatchCreateFromFolder(dto?.folder ?? '');
+  }
+
+  /** 批量删除合集：被时段引用时自动解绑 */
+  @Post('collections/batch-delete')
+  batchDeleteCollections(@Body() dto: { ids?: string[] }): ChildTvBatchDeleteResult {
+    return this.childTvService.batchDeleteCollections(dto?.ids ?? []);
+  }
+
   /** 解析 URL：直链 or 合集页提取视频地址；cookie 为平台解析所需登录态（可选，成功后自动保存复用） */
   @Post('resolve-url')
   async resolveUrl(
@@ -180,26 +202,32 @@ export class ChildTvController {
   }
 
   @Post('stop')
-  stop(): { success: boolean } {
+  stop(): Promise<{ success: boolean }> {
     return this.childTvService.stopPlayback('家长手动停止');
   }
 
   // ===== 状态 =====
 
   @Get('status')
-  status(): ChildTvRuntimeStatus {
+  async status(): Promise<ChildTvRuntimeStatus> {
     return this.childTvService.getRuntimeStatus();
+  }
+
+  /** 合集播放进度列表（展示"上次播到第几集/位置"） */
+  @Get('progress')
+  getProgress(): ChildTvCollectionProgressInfo[] {
+    return this.childTvService.getCollectionProgress();
   }
 
   /** 观看页免登录只读状态 */
   @Get('watch-status')
-  watchStatus(): {
+  async watchStatus(): Promise<{
     playing: boolean;
     currentTitle: string;
     remainingMinutes: number | null;
     nextSchedule: { name: string; startLabel: string; startsInMinutes: number } | null;
     endsAt: string | null;
-  } {
+  }> {
     return this.childTvService.getWatchStatus();
   }
 

@@ -21,6 +21,7 @@ import { InsightsService } from '@server/modules/insights/insights.service';
 import { ReviewService } from '@server/modules/review/review.service';
 import { ReviewBoardService } from '@server/modules/review-board/review-board.service';
 import { ChildTvService } from '@server/modules/child-tv/child-tv.service';
+import { ProjectManagerService } from '@server/modules/project-manager/project-manager.service';
 import type {
   PluginMethod,
   PluginMethodParam,
@@ -58,6 +59,7 @@ export class PluginMethodRegistry {
     private readonly reviewService: ReviewService,
     private readonly reviewBoardService: ReviewBoardService,
     private readonly childTvService: ChildTvService,
+    private readonly projectManagerService: ProjectManagerService,
   ) {
     this.registerChildResourcesMethods();
     this.registerGoalsMethods();
@@ -75,6 +77,7 @@ export class PluginMethodRegistry {
     this.registerReviewBoardMethods();
     this.registerChildTvMethods();
     this.registerTaskFocusMethods();
+    this.registerProjectManagerMethods();
   }
 
   // ===== Child Resources =====
@@ -2025,6 +2028,133 @@ export class PluginMethodRegistry {
     }, async () => {
       const items = this.childTvService.getStats();
       return { items, total: items.length };
+    });
+  }
+
+  // ===== 项目管理（飞书多维表格 + 影刀指令闭环） =====
+
+  private registerProjectManagerMethods(): void {
+    const pluginKey = 'dsh-plugin-project-manager';
+
+    this.register({
+      id: 'project-manager.getOverview',
+      name: '查询项目管理看板',
+      description: '查询项目管理看板：全部项目的阶段进度（当前阶段百分比）、平台、注意事项、指令完成 x/y 汇总（数据源为飞书多维表格，经云函数聚合）',
+      pluginKey,
+      params: [],
+    }, async () => {
+      return this.projectManagerService.getOverview();
+    });
+
+    this.register({
+      id: 'project-manager.getProject',
+      name: '查询项目详情',
+      description: '查询单个项目的详情：阶段进度、注意事项、该项目的全部指令（含执行状态、返回结果、错误信息、排序号）',
+      pluginKey,
+      params: [
+        { name: 'name', type: 'string', required: false, description: '项目名称（与 recordId 二选一，支持模糊匹配）' },
+        { name: 'recordId', type: 'string', required: false, description: '项目记录 ID（与 name 二选一）' },
+      ],
+    }, async (args) => {
+      const overview = await this.projectManagerService.getOverview();
+      const recordId = String(args.recordId ?? '');
+      if (recordId) {
+        const hit = overview.projects.find((p) => p.recordId === recordId);
+        return hit ?? { notFound: true, message: `未找到记录 ID 为「${recordId}」的项目` };
+      }
+      const name = String(args.name ?? '').trim();
+      if (!name) throw new BadRequestException('请提供项目名称（name）或记录 ID（recordId）');
+      const hit = overview.projects.find(
+        (p) => p.name.includes(name) || name.includes(p.name),
+      );
+      return hit ?? { notFound: true, message: `未找到项目「${name}」` };
+    });
+
+    this.register({
+      id: 'project-manager.rerunInstruction',
+      name: '重新执行指令',
+      description: '将指定指令重置为「待执行」重新排队（失败/未执行/已完成均可重跑，会清空旧返回结果与错误信息），由本机影刀下次轮询时再次执行',
+      pluginKey,
+      params: [
+        { name: 'projectName', type: 'string', required: false, description: '所属项目名称，用于定位（与 instructionId 二选一；按名称匹配指令时必填）' },
+        { name: 'instructionId', type: 'string', required: false, description: '指令记录 ID，必填其一' },
+        { name: 'instructionName', type: 'string', required: false, description: '指令名称/编号，与 instructionId 二选一（支持模糊匹配）' },
+      ],
+    }, async (args) => {
+      const instructionId = String(args.instructionId ?? '').trim();
+      const name = String(args.instructionName ?? '').trim();
+      const projectName = String(args.projectName ?? '').trim();
+      if (instructionId) {
+        return this.projectManagerService.rerunInstruction(instructionId);
+      }
+      if (!name) throw new BadRequestException('请提供指令记录 ID（instructionId）或指令名称（instructionName）');
+      const overview = await this.projectManagerService.getOverview();
+      const candidates = overview.projects
+        .filter((p) => !projectName || p.name.includes(projectName) || projectName.includes(p.name))
+        .flatMap((p) => p.instructions)
+        .filter((i) => i.name.includes(name) || name.includes(i.name));
+      if (candidates.length === 0) {
+        throw new NotFoundException(`未找到匹配的指令「${name}」${projectName ? `（项目：${projectName}）` : ''}`);
+      }
+      if (candidates.length > 1) {
+        throw new BadRequestException(`找到 ${candidates.length} 条同名指令，请提供更精确的指令名称或指定 instructionId`);
+      }
+      return this.projectManagerService.rerunInstruction(candidates[0].recordId);
+    });
+
+    this.register({
+      id: 'project-manager.getConfig',
+      name: '查询项目管理连接配置',
+      description: '查询项目管理插件的飞书多维表格连接配置（不返回令牌明文，仅返回是否已配置）',
+      pluginKey,
+      params: [],
+    }, async () => {
+      const cfg = this.projectManagerService.loadConfig();
+      return {
+        appToken: cfg.appToken ?? '',
+        projectTableId: cfg.projectTableId ?? '',
+        instructionTableId: cfg.instructionTableId ?? '',
+        tableUrl: cfg.tableUrl ?? '',
+        pollIntervalMin: cfg.pollIntervalMin ?? 5,
+        hasApiToken: Boolean(cfg.apiToken),
+        hasAppCredential: Boolean(cfg.appId && cfg.appSecret),
+      };
+    });
+
+    this.register({
+      id: 'project-manager.updateConfig',
+      name: '更新项目管理连接配置',
+      description: '更新项目管理插件的飞书多维表格连接配置（app_token、项目主表/指令任务表 table_id、个人令牌或自建应用凭证）',
+      pluginKey,
+      params: [
+        { name: 'appToken', type: 'string', required: true, description: '飞书多维表格 app_token，必填' },
+        { name: 'projectTableId', type: 'string', required: true, description: '项目主表 table_id，必填' },
+        { name: 'instructionTableId', type: 'string', required: true, description: '指令任务表 table_id，必填' },
+        { name: 'apiToken', type: 'string', required: false, description: '飞书个人令牌（与 appId/appSecret 二选一）' },
+        { name: 'appId', type: 'string', required: false, description: '自建应用 App ID（与 apiToken 二选一）' },
+        { name: 'appSecret', type: 'string', required: false, description: '自建应用 App Secret（与 apiToken 二选一）' },
+        { name: 'tableUrl', type: 'string', required: false, description: '表格预览链接，用于页面「打开表格」跳转' },
+        { name: 'pollIntervalMin', type: 'number', required: false, description: '影刀轮询间隔（分钟），仅作展示参考' },
+      ],
+    }, async (args) => {
+      const dto: Record<string, unknown> = {};
+      for (const key of ['appToken', 'projectTableId', 'instructionTableId', 'apiToken', 'appId', 'appSecret', 'tableUrl', 'baseUrl'] as const) {
+        if (typeof args[key] === 'string' && String(args[key]).trim()) dto[key] = String(args[key]).trim();
+      }
+      if (typeof args.pollIntervalMin === 'number') dto.pollIntervalMin = args.pollIntervalMin;
+      if (!dto.appToken || !dto.projectTableId || !dto.instructionTableId) {
+        throw new BadRequestException('appToken、projectTableId、instructionTableId 必填');
+      }
+      const saved = this.projectManagerService.saveConfig(dto);
+      return {
+        success: true,
+        message: '连接配置已保存',
+        appToken: saved.appToken ?? '',
+        projectTableId: saved.projectTableId ?? '',
+        instructionTableId: saved.instructionTableId ?? '',
+        hasApiToken: Boolean(saved.apiToken),
+        hasAppCredential: Boolean(saved.appId && saved.appSecret),
+      };
     });
   }
 

@@ -20,3 +20,4 @@ export * as timeBlackholeApi from './time-blackhole';
 export * as childTvApi from './child-tv';
 export { CHILD_TV_UNAUTHORIZED_EVENT } from './child-tv';
 export * as marketApi from './market';
+export * as projectManagerApi from './project-manager';

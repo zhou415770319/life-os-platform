@@ -13,6 +13,7 @@ import {
   Tv,
   FolderOpen,
   FolderUp,
+  FolderPlus,
   HardDrive,
   Settings as SettingsIcon,
   ScrollText,
@@ -28,8 +29,11 @@ import {
 } from 'lucide-react';
 import { childTvApi } from '@client/src/api';
 import type {
+  ChildTvBatchPreviewResult,
   ChildTvBrowseResult,
   ChildTvCollection,
+  ChildTvCollectionProgressInfo,
+  ChildTvRuntimeStatus,
   ChildTvScanFile,
   ChildTvSchedule,
   ChildTvScheduleInput,
@@ -41,6 +45,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -51,6 +56,53 @@ import {
 } from '@/components/ui/dialog';
 
 const WEEK_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 条目展示名：文件夹/文件只显示文件名（完整路径仍在数据中保留），URL 显示标题 + 地址 */
+export function itemDisplayName(i: {
+  type: 'folder' | 'file' | 'url';
+  value: string;
+  title?: string;
+}): string {
+  if (i.type === 'folder' || i.type === 'file') {
+    const v = i.value.replace(/[\\/]+$/, '');
+    const base = v.split(/[\\/]/).pop() || v;
+    return i.title ? `${i.title} · ${base}` : base;
+  }
+  return i.title ? `${i.title} · ${i.value}` : i.value;
+}
+
+/** 秒 → h:mm:ss / mm:ss 展示 */
+export function formatDuration(sec: number | null | undefined): string {
+  if (sec === null || sec === undefined || !Number.isFinite(sec) || sec <= 0) return '';
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+  return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+/** 合集本地条目可探测总时长（秒）；未知条目不计数，返回 null 表示全部未知 */
+export function collectionDuration(col: ChildTvCollection): number | null {
+  let total = 0;
+  let known = 0;
+  for (const it of col.items) {
+    if (it.type === 'file' && it.duration && it.duration > 0) {
+      total += it.duration;
+      known++;
+    }
+  }
+  return known > 0 ? total : null;
+}
+
+/** 当前合集播放进度（第几集/位置） */
+export function collectionProgressOf(
+  col: ChildTvCollection,
+  progress: ChildTvCollectionProgressInfo[] | undefined,
+): ChildTvCollectionProgressInfo | null {
+  if (!progress || !col.id) return null;
+  return progress.find((p) => p.collectionId === col.id) ?? null;
+}
 
 /** 解析平台中文名（用于解析结果类型标签） */
 function platformName(p?: string): string {
@@ -644,8 +696,7 @@ function CollectionDialog({
                   {itemLabel(i)}
                 </Badge>
                 <div className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300" title={i.value}>
-                  {i.title ? `${i.title} · ` : ''}
-                  {i.value}
+                  {itemDisplayName(i)}
                 </div>
                 <div className="flex shrink-0 gap-0.5">
                   {i.type === 'folder' && (
@@ -1369,6 +1420,12 @@ export default function ChildTvAdminPage() {
     queryFn: childTvApi.childTvListCollections,
   });
 
+  const { data: progress = [] } = useQuery({
+    queryKey: ['child-tv-progress'],
+    queryFn: childTvApi.childTvProgress,
+    refetchInterval: 10_000,
+  });
+
   const { data: logs = [] } = useQuery({
     queryKey: ['child-tv-logs'],
     queryFn: childTvApi.childTvLogs,
@@ -1525,6 +1582,74 @@ export default function ChildTvAdminPage() {
   // 删除确认：合集被时段使用时先弹框告知影响
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string; usedBy: string[] } | null>(null);
 
+  // ===== 批量创建 / 批量删除合集 =====
+  const [batchPickerOpen, setBatchPickerOpen] = useState(false);
+  const [selectedColIds, setSelectedColIds] = useState<string[]>([]);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchCreating, setBatchCreating] = useState(false);
+  /** 批量创建预览结果（先扫描对比，确认后再真正创建） */
+  const [batchPreview, setBatchPreview] = useState<{
+    folder: string;
+    result: ChildTvBatchPreviewResult;
+  } | null>(null);
+
+  const batchCreateMutation = useMutation({
+    mutationFn: (folder: string) => childTvApi.childTvBatchCreateCollections(folder),
+    onSuccess: (r) => {
+      setBatchPreview(null);
+      if (r.created.length) {
+        toast.success(`批量创建完成：${r.created.length} 个合集`);
+      } else {
+        toast.info('没有可创建的合集（子文件夹均无音视频或已存在）');
+      }
+      if (r.skipped.length) {
+        toast.warning(
+          `跳过 ${r.skipped.length} 项：${r.skipped
+            .slice(0, 5)
+            .map((s) => `${s.name}（${s.reason}）`)
+            .join('、')}${r.skipped.length > 5 ? '…' : ''}`,
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ['child-tv-collections'] });
+    },
+    onError: (e) => {
+      toast.error(extractApiError(e, '批量创建失败'));
+    },
+    onSettled: () => setBatchCreating(false),
+  });
+
+  const batchPreviewMutation = useMutation({
+    mutationFn: (folder: string) => childTvApi.childTvBatchPreviewCollections(folder),
+    onSuccess: (r, folder) => {
+      setBatchPreview({ folder, result: r });
+    },
+    onError: (e) => {
+      toast.error(extractApiError(e, '扫描失败'));
+    },
+    onSettled: () => setBatchCreating(false),
+  });
+
+  const batchDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => childTvApi.childTvBatchDeleteCollections(ids),
+    onSuccess: (r) => {
+      toast.success(
+        `已删除 ${r.deleted} 个合集${r.detachedSchedules.length ? `，已解除时段绑定：${r.detachedSchedules.join('、')}` : ''}`,
+      );
+      if (r.failed.length) toast.warning(`删除失败：${r.failed.map((f) => f.reason).join('；')}`);
+      setBatchDeleteOpen(false);
+      setSelectedColIds([]);
+      queryClient.invalidateQueries({ queryKey: ['child-tv-collections'] });
+      queryClient.invalidateQueries({ queryKey: ['child-tv-schedules'] });
+    },
+    onError: (e) => {
+      toast.error(extractApiError(e, '批量删除失败'));
+    },
+  });
+
+  const toggleSelectCol = (id: string) => {
+    setSelectedColIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
   // ===== 控制 =====
   const playMutation = useMutation({
     mutationFn: (dto: { scheduleId?: string; collectionId?: string; entryIndex?: number }) =>
@@ -1550,20 +1675,25 @@ export default function ChildTvAdminPage() {
   const [pwd1, setPwd1] = useState('');
   const [pin, setPin] = useState('');
   const [mpvPath, setMpvPath] = useState('');
+  const [xmTrackMinutes, setXmTrackMinutes] = useState('15');
   const [timeOpen, setTimeOpen] = useState(false);
   const [mpvPickerOpen, setMpvPickerOpen] = useState(false);
 
   useEffect(() => {
     if (settings) {
       setMpvPath(settings.mpvPath || '');
+      setXmTrackMinutes(String(settings.ximalayaTrackDurationMinutes ?? 15));
     }
   }, [settings]);
 
   const settingsMutation = useMutation({
-    mutationFn: () =>
-      childTvApi.childTvUpdateSettings({
+    mutationFn: () => {
+      const m = Math.round(Number(xmTrackMinutes));
+      return childTvApi.childTvUpdateSettings({
         mpvPath: mpvPath.trim(),
-      }),
+        ximalayaTrackDurationMinutes: Number.isFinite(m) ? Math.min(60, Math.max(1, m)) : 15,
+      });
+    },
     onSuccess: () => {
       toast.success('设置已保存');
       refresh();
@@ -1733,6 +1863,51 @@ export default function ChildTvAdminPage() {
                         下一集 <ChevronRight className="ml-0.5 h-3.5 w-3.5" />
                       </Button>
                     </div>
+                  </div>
+                ) : null}
+                {status.currentEntryTitle ? (
+                  <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-4 py-3">
+                    <span className="text-zinc-400">当前内容</span>
+                    <span className="max-w-[60%] truncate font-medium text-zinc-100">
+                      {status.currentEntryTitle}
+                    </span>
+                  </div>
+                ) : null}
+                {status.currentPosition !== null && status.currentDuration ? (
+                  <div className="rounded-lg bg-white/[0.03] px-4 py-3">
+                    <div className="flex items-center justify-between text-xs text-zinc-400">
+                      <span>本集进度</span>
+                      <span className="tabular-nums">
+                        {formatDuration(status.currentPosition)} / {formatDuration(status.currentDuration)}
+                      </span>
+                    </div>
+                    <Progress
+                      className="mt-2 h-1.5 bg-white/10"
+                      value={Math.min(
+                        100,
+                        Math.round((status.currentPosition / status.currentDuration) * 100),
+                      )}
+                    />
+                  </div>
+                ) : null}
+                {status.collectionTotalDuration !== null ? (
+                  <div className="rounded-lg bg-white/[0.03] px-4 py-3">
+                    <div className="flex items-center justify-between text-xs text-zinc-400">
+                      <span>合集进度</span>
+                      <span className="tabular-nums">
+                        {formatDuration(status.collectionPlayedSeconds)} /{' '}
+                        {formatDuration(status.collectionTotalDuration)}
+                      </span>
+                    </div>
+                    <Progress
+                      className="mt-2 h-1.5 bg-white/10"
+                      value={Math.min(
+                        100,
+                        Math.round(
+                          ((status.collectionPlayedSeconds ?? 0) / status.collectionTotalDuration) * 100,
+                        ),
+                      )}
+                    />
                   </div>
                 ) : null}
                 <div className="flex items-center justify-between rounded-lg bg-white/[0.03] px-4 py-3">
@@ -1948,12 +2123,57 @@ export default function ChildTvAdminPage() {
       {/* 合集管理 */}
       {activeTab === 'collections' && (
         <Card className="mb-6 overflow-hidden">
-          <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 px-6 py-4">
             <h3 className="text-sm font-medium text-zinc-300">播放合集</h3>
-            <Button size="sm" onClick={() => setCollectionDialog({ open: true, editing: null })}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> 新建合集
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBatchPickerOpen(true)}
+                disabled={batchCreating}
+              >
+                {batchCreating ? (
+                  <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FolderPlus className="mr-1 h-3.5 w-3.5" />
+                )}
+                批量创建
+              </Button>
+              <Button size="sm" onClick={() => setCollectionDialog({ open: true, editing: null })}>
+                <Plus className="mr-1 h-3.5 w-3.5" /> 新建合集
+              </Button>
+            </div>
           </div>
+          {selectedColIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-white/5 bg-indigo-500/[0.07] px-6 py-2.5">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-indigo-500"
+                checked={selectedColIds.length === collections.length && collections.length > 0}
+                onChange={(e) =>
+                  setSelectedColIds(e.target.checked ? collections.map((c) => c.id) : [])
+                }
+              />
+              <span className="text-xs text-zinc-300">已选 {selectedColIds.length} 个合集</span>
+              <button
+                onClick={() => setSelectedColIds([])}
+                className="text-xs text-zinc-500 hover:text-zinc-300"
+              >
+                清空
+              </button>
+              <div className="ml-auto">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="text-rose-400"
+                  disabled={batchDeleteMutation.isPending}
+                  onClick={() => setBatchDeleteOpen(true)}
+                >
+                  <Trash2 className="mr-1 h-3.5 w-3.5" /> 批量删除
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="divide-y divide-white/5">
             {collections.length === 0 && (
               <div className="px-6 py-8 text-center text-sm text-zinc-500">
@@ -1962,6 +2182,12 @@ export default function ChildTvAdminPage() {
             )}
             {collections.map((c) => (
               <div key={c.id} className="flex flex-wrap items-center gap-3 px-6 py-3">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-indigo-500"
+                  checked={selectedColIds.includes(c.id)}
+                  onChange={() => toggleSelectCol(c.id)}
+                />
                 <div className="min-w-[140px]">
                   <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
                     {c.name}
@@ -1969,16 +2195,31 @@ export default function ChildTvAdminPage() {
                       {c.platform === 'ximalaya' ? '🎧 喜马拉雅' : c.platform === 'web' ? '🌐 网页' : '📁 本地'}
                     </Badge>
                   </div>
-                  <div className="text-xs text-zinc-500">{c.items.length} 个条目</div>
+                  <div className="text-xs text-zinc-500">
+                    {c.items.length} 个条目
+                    {collectionDuration(c) !== null && (
+                      <>
+                        {' '}
+                        · 总时长 {formatDuration(collectionDuration(c))}
+                        {c.items.some((i) => i.type === 'file' && !i.duration) ? '（部分未知）' : ''}
+                      </>
+                    )}
+                  </div>
+                  {(() => {
+                    const p = collectionProgressOf(c, progress);
+                    if (!p) return null;
+                    return (
+                      <div className="text-[11px] text-indigo-400/90">
+                        上次播到第 {p.entryIndex + 1} 集
+                        {p.position ? ` · ${formatDuration(p.position)}` : ''}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="min-w-0 flex-1 truncate text-xs text-zinc-500">
                   {c.items.length === 0
                     ? '（空合集）'
-                    : c.items
-                        .map((i) =>
-                          i.type === 'folder' ? `📁 ${i.value}` : i.type === 'file' ? `📄 ${i.value}` : `🔗 ${i.title || i.value}`,
-                        )
-                        .join('  ·  ')}
+                    : c.items.map((i) => itemDisplayName(i)).join('  ·  ')}
                 </div>
                 <div className="flex gap-1">
                   <Button variant="ghost" size="sm" onClick={() => setCollectionDialog({ open: true, editing: c })}>
@@ -2088,6 +2329,19 @@ export default function ChildTvAdminPage() {
               placeholder="设置后观看页需输入 PIN"
               className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-zinc-400">喜马拉雅单集自动切换间隔（分钟，1-60）</label>
+            <input
+              type="number"
+              min={1}
+              max={60}
+              value={xmTrackMinutes}
+              onChange={(e) => setXmTrackMinutes(e.target.value)}
+              placeholder="默认 15 分钟"
+              className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 outline-none"
+            />
+            <p className="mt-1 text-[11px] text-zinc-500">喜马拉雅 .xm 合集逐集播放时，每集到时自动切下一集（循环播放）</p>
           </div>
           <div>
             <label className="mb-1 block text-xs text-zinc-400">修改登录密码（留空不修改）</label>
@@ -2311,6 +2565,120 @@ export default function ChildTvAdminPage() {
               }}
             >
               确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量删除合集确认 */}
+      <Dialog open={batchDeleteOpen} onOpenChange={(o) => !o && setBatchDeleteOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>批量删除 {selectedColIds.length} 个合集</DialogTitle>
+            <DialogDescription>
+              将删除选中的 {selectedColIds.length} 个合集，被时段引用的合集会自动解除绑定
+              （时段保留但变为「未选合集」）。此操作不可撤销，确定删除吗？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setBatchDeleteOpen(false)}>
+              取消
+            </Button>
+            <Button
+              className="text-rose-400"
+              disabled={batchDeleteMutation.isPending}
+              onClick={() => batchDeleteMutation.mutate(selectedColIds)}
+            >
+              确认批量删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量创建合集：选择父文件夹（先预览对比） */}
+      <FilePickerDialog
+        open={batchPickerOpen}
+        onClose={() => setBatchPickerOpen(false)}
+        pickMode="folder"
+        title="选择父文件夹（自动按子文件夹批量创建合集）"
+        onPick={(p) => {
+          setBatchPickerOpen(false);
+          setBatchCreating(true);
+          batchPreviewMutation.mutate(p);
+        }}
+      />
+
+      {/* 批量创建预览：对比将新建 / 已存在 / 无媒体，确认后再真正创建 */}
+      <Dialog open={!!batchPreview} onOpenChange={(o) => !o && setBatchPreview(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>批量创建预览</DialogTitle>
+            <DialogDescription>
+              {batchPreview?.result.toCreate.length
+                ? `将新建 ${batchPreview.result.toCreate.length} 个合集，确认后开始创建`
+                : '没有可新建的合集（全部已存在或没有音视频文件）'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
+            {batchPreview && (
+              <>
+                <div>
+                  <div className="mb-1 text-xs font-medium text-emerald-300">
+                    ✓ 将新建（{batchPreview.result.toCreate.length}）
+                  </div>
+                  <div className="space-y-1">
+                    {batchPreview.result.toCreate.length === 0 && (
+                      <div className="text-xs text-zinc-600">无</div>
+                    )}
+                    {batchPreview.result.toCreate.map((t) => (
+                      <div key={t.name} className="flex items-center gap-2 text-xs text-zinc-300">
+                        <span className="truncate">{t.name}</span>
+                        <span className="ml-auto shrink-0 text-[10px] text-zinc-500">
+                          {t.count} 个文件
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-xs font-medium text-amber-300/90">
+                    ⏭ 跳过（{batchPreview.result.skipped.length}）
+                  </div>
+                  <div className="space-y-1">
+                    {batchPreview.result.skipped.length === 0 && (
+                      <div className="text-xs text-zinc-600">无</div>
+                    )}
+                    {batchPreview.result.skipped.map((s) => (
+                      <div key={s.name} className="flex items-center gap-2 text-xs text-zinc-400">
+                        <span className="truncate">{s.name}</span>
+                        <span className="ml-auto shrink-0 text-[10px] text-zinc-500">
+                          {s.reason}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setBatchPreview(null)}>
+              取消
+            </Button>
+            <Button
+              disabled={
+                !batchPreview ||
+                batchPreview.result.toCreate.length === 0 ||
+                batchCreateMutation.isPending
+              }
+              onClick={() => {
+                if (batchPreview) {
+                  setBatchCreating(true);
+                  batchCreateMutation.mutate(batchPreview.folder);
+                }
+              }}
+            >
+              {batchCreateMutation.isPending ? '创建中…' : '确认创建'}
             </Button>
           </DialogFooter>
         </DialogContent>

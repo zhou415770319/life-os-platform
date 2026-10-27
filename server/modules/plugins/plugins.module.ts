@@ -16,6 +16,7 @@ import { InsightsModule } from '@server/modules/insights/insights.module';
 import { ReviewModule } from '@server/modules/review/review.module';
 import { ReviewBoardModule } from '@server/modules/review-board/review-board.module';
 import { ChildTvModule } from '@server/modules/child-tv/child-tv.module';
+import { ProjectManagerModule } from '@server/modules/project-manager/project-manager.module';
 import { PluginMethodRegistry } from './plugin-method.registry';
 import { PluginRuntimeService } from './plugin-runtime.service';
 import { MarketService } from './market.service';
@@ -41,6 +42,7 @@ import { AiChatHistoryService } from './ai-chat-history.service';
     ReviewModule,
     ReviewBoardModule,
     ChildTvModule,
+    ProjectManagerModule,
   ],
   controllers: [PluginsController, AiChatController, MarketController],
   providers: [PluginsService, PluginMethodRegistry, PluginRuntimeService, AiChatService, AiChatHistoryService, MarketService],

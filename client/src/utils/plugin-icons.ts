@@ -22,6 +22,7 @@ import {
   FileSpreadsheet,
   ClipboardList,
   Tv,
+  Kanban,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -49,6 +50,7 @@ export const pluginIconMap: Record<string, LucideIcon> = {
   hourglass: Hourglass,
   'file-spreadsheet': FileSpreadsheet,
   tv: Tv,
+  kanban: Kanban,
 };
 
 export function getPluginIcon(iconName: string): LucideIcon {
